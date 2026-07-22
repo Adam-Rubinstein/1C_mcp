@@ -27,6 +27,13 @@ def main() -> int:
         return 2
     path = PACKAGES[sys.argv[1]]
     sys.path.insert(0, str(ROOT / "packages" / "shared"))
+    # Prefer monorepo .env regardless of process cwd
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv(ROOT / ".env", override=False)
+    except Exception:
+        pass
     runpy.run_path(str(path), run_name="__main__")
     return 0
 
