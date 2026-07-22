@@ -8,15 +8,17 @@ Public monorepo of MCP servers for 1C:Enterprise development: platform API help,
 
 | Package | Port (SSE default) | Tools (summary) |
 |---------|--------------------|-----------------|
-| `mcp-1c-platform` | 8760 | Platform API via legacy JAR (`search`, `info`, `getMember`, …) |
-| `mcp-1c-dump` | 8761 | `dump_objects`, `dump_changes`, `dump_status` |
-| `mcp-1c-load` | 8762 | `load_objects` (requires `confirm=true`; storage lock → `objectsToCapture`) |
-| `mcp-1c-com` | 8763 | `com_query`, `com_metadata_find`, `com_ping` |
-| `mcp-1c-files` | 8764 | `files_search`, `files_find_usages`, `files_read` |
-| `mcp-1c-review` | 8765 | YAML checklist `review_check` |
-| `mcp-1c-journal` | 8766 | Event log via COM |
-| `mcp-1c-debug` | 8767 | HTTP debug (`dbgs` protocol) |
-| `mcp-1c-bsl` | 8768 | BSL Language Server wiring |
+| `mcp-1c-platform` | 18760 | Platform API via legacy JAR (`search`, `info`, `getMember`, …) |
+| `mcp-1c-dump` | 18761 | `dump_objects`, `dump_changes`, `dump_status` |
+| `mcp-1c-load` | 18762 | `load_objects` (requires `confirm=true`; storage lock → `objectsToCapture`) |
+| `mcp-1c-com` | 18763 | `com_query`, `com_metadata_find`, `com_ping` |
+| `mcp-1c-files` | 18764 | `files_search`, `files_find_usages`, `files_read` |
+| `mcp-1c-review` | 18765 | YAML checklist `review_check` |
+| `mcp-1c-journal` | 18766 | Event log via COM |
+| `mcp-1c-debug` | 18767 | HTTP debug (`dbgs` protocol) |
+| `mcp-1c-bsl` | 18768 | BSL Language Server wiring |
+
+Default deploy ports use **1876x** (avoids clashes with other tools on 876x).
 
 Shared code: `packages/shared/onec_mcp_shared/`.
 

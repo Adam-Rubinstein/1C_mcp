@@ -13,14 +13,15 @@ PY = ROOT / ".venv" / "Scripts" / "python.exe"
 if not PY.is_file():
     PY = Path(sys.executable)
 
+# 1876x avoids clashes with other local agents on 876x
 SERVICES = [
-    ("dump", 8761),
-    ("load", 8762),
-    ("com", 8763),
-    ("files", 8764),
-    ("review", 8765),
-    ("journal", 8766),
-    ("debug", 8767),
+    ("dump", 18761),
+    ("load", 18762),
+    ("com", 18763),
+    ("files", 18764),
+    ("review", 18765),
+    ("journal", 18766),
+    ("debug", 18767),
 ]
 
 
