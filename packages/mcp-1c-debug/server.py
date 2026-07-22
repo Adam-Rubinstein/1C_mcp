@@ -190,7 +190,7 @@ def debug_eval(expression: str) -> str:
 
 
 def main() -> None:
-    run_mcp(mcp, default_port=8767)
+    run_mcp(mcp, default_port=18767)
 
 
 if __name__ == "__main__":

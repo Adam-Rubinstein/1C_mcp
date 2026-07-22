@@ -142,7 +142,7 @@ def _parse_events_xml(text: str, limit: int) -> list[dict[str, Any]]:
 
 
 def main() -> None:
-    run_mcp(mcp, default_port=8766)
+    run_mcp(mcp, default_port=18766)
 
 
 if __name__ == "__main__":

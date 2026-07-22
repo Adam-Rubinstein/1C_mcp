@@ -57,7 +57,7 @@
       }
     },
     "1c-dump-remote-example": {
-      "url": "http://YOUR_HOST:8761/sse",
+      "url": "http://YOUR_HOST:18761/sse",
       "headers": {
         "Authorization": "Bearer YOUR_MCP_TOKEN"
       }

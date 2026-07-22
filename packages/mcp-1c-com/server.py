@@ -146,7 +146,7 @@ def _to_jsonable(val: Any) -> Any:
 
 
 def main() -> None:
-    run_mcp(mcp, default_port=8763)
+    run_mcp(mcp, default_port=18763)
 
 
 if __name__ == "__main__":

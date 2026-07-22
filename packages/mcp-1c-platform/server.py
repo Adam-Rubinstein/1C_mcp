@@ -95,7 +95,7 @@ def search(query: str, type: str | None = None, limit: int = 10) -> str:
 def main() -> None:
     # Default: if stdio and JAR exists, prefer documenting jar-direct.
     # Python wrapper still useful for status and HTTP health checks.
-    run_mcp(mcp, default_port=8760)
+    run_mcp(mcp, default_port=18760)
 
 
 if __name__ == "__main__":

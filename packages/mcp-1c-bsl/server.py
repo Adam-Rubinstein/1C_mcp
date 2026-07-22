@@ -60,7 +60,7 @@ def main() -> None:
         cmd = env("BSL_LS_COMMAND")
         if cmd and shutil.which(cmd):
             os.execvp(cmd, [cmd, *os.environ.get("BSL_LS_ARGS", "").split()])
-    run_mcp(mcp, default_port=8768)
+    run_mcp(mcp, default_port=18768)
 
 
 if __name__ == "__main__":

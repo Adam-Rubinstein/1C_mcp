@@ -158,7 +158,7 @@ def dump_changes(
 
 
 def main() -> None:
-    run_mcp(mcp, default_port=8761)
+    run_mcp(mcp, default_port=18761)
 
 
 if __name__ == "__main__":

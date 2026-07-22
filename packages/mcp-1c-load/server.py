@@ -98,7 +98,7 @@ def load_objects(
 
 
 def main() -> None:
-    run_mcp(mcp, default_port=8762)
+    run_mcp(mcp, default_port=18762)
 
 
 if __name__ == "__main__":

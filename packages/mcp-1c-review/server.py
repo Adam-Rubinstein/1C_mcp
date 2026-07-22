@@ -152,7 +152,7 @@ def _path_matches_glob(path: str, file_glob: str) -> bool:
 
 
 def main() -> None:
-    run_mcp(mcp, default_port=8765)
+    run_mcp(mcp, default_port=18765)
 
 
 if __name__ == "__main__":

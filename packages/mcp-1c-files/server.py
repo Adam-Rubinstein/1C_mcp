@@ -138,7 +138,7 @@ def _match_name_glob(path: Path, glob_pat: str) -> bool:
 
 
 def main() -> None:
-    run_mcp(mcp, default_port=8764)
+    run_mcp(mcp, default_port=18764)
 
 
 if __name__ == "__main__":
