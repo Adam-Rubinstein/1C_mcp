@@ -30,12 +30,3 @@ htmlcov/
 *.swp
 Thumbs.db
 .DS_Store
-
-# Build (legacy kotlin)
-legacy/kotlin-platform/build/
-legacy/kotlin-platform/.gradle/
-legacy/kotlin-platform/out/
-
-# Keep runtime jar
-!packages/mcp-1c-platform/runtime/*.jar
-!dist/*.jar

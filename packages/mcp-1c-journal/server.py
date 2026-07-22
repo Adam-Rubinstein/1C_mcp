@@ -23,7 +23,7 @@ def _connect():
         raise RuntimeError("pywin32 is required for journal (pip install pywin32)") from exc
 
     connector = win32com.client.Dispatch("V83.COMConnector")
-    ib = env("ONEC_IB")
+    ib = env("ONEC_IB_DEV") or env("ONEC_IB")
     server = env("ONEC_SERVER")
     ref = env("ONEC_REF")
     user = env("ONEC_USER", "") or ""
@@ -33,7 +33,7 @@ def _connect():
     elif server and ref:
         conn_str = f'Srvr="{server}";Ref="{ref}";'
     else:
-        raise ValueError("Set ONEC_IB or ONEC_SERVER+ONEC_REF")
+        raise ValueError("Set ONEC_IB_DEV / ONEC_IB or ONEC_SERVER+ONEC_REF")
     if user:
         conn_str += f'Usr="{user}";'
     conn_str += f'Pwd="{password}";'

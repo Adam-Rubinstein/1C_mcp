@@ -41,8 +41,8 @@ def test_parse_storage_errors():
     assert "Document.Foo" in objs
 
 
-def test_parse_storage_no_false_positive():
-    err, objs = parse_storage_errors("Выгрузка завершена успешно", ["Document.Foo"])
+def test_parse_storage_not_connected_is_not_lock():
+    err, objs = parse_storage_errors("Соединение с хранилищем конфигурации не установлено", ["Document.Foo"])
     assert err is False
     assert objs == []
 
@@ -66,7 +66,25 @@ def test_merge_copy(tmp_path: Path):
     assert (dst / "Documents" / "A.xml").read_text(encoding="utf-8") == "<x/>"
 
 
+def test_cmdline_matches_ib_exact_name(monkeypatch: pytest.MonkeyPatch):
+    """Prefix IB titles must not cross-match (ERP КОПИЯ vs ERP КОПИЯ запасная)."""
+    from onec_mcp_shared import session as sess
+
+    mapping = {
+        "ERP КОПИЯ": r"C:\Users\rubinshtein\Documents\InfoBase3",
+        "ERP КОПИЯ запасная": r"C:\Users\rubinshtein\Documents\InfoBase2",
+    }
+    monkeypatch.setattr(sess, "_ibases_v8i_paths", lambda: mapping)
+    cmd_work = r'DESIGNER /IBName"ERP КОПИЯ" /AppAutoCheckMode'
+    cmd_dev = r'DESIGNER /IBName"ERP КОПИЯ запасная" /Lru'
+    assert sess._cmdline_matches_ib(cmd_dev, mapping["ERP КОПИЯ запасная"])
+    assert not sess._cmdline_matches_ib(cmd_dev, mapping["ERP КОПИЯ"])
+    assert sess._cmdline_matches_ib(cmd_work, mapping["ERP КОПИЯ"])
+    assert not sess._cmdline_matches_ib(cmd_work, mapping["ERP КОПИЯ запасная"])
+
+
 def test_designer_result_json_roundtrip():
+
     from onec_mcp_shared import DesignerResult
 
     r = DesignerResult(

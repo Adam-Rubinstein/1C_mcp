@@ -56,14 +56,12 @@ TYPE_MAP_RU_TO_EN = {
 }
 
 STORAGE_HINTS = (
-    "хранилищ",
-    "захват",
-    "захвачен",
     "не захвачен",
-    "configuration repository",
-    "locked by",
-    "object is locked",
+    "захвачен другим",
     "не удалось захватить",
+    "object is locked",
+    "locked by",
+    "требуется захват",
 )
 
 
@@ -180,22 +178,40 @@ def list_dumped_paths(dump_dir: Path) -> list[str]:
     return sorted(paths)
 
 
-def build_ib_args() -> list[str]:
-    ib = env("ONEC_IB")
-    server = env("ONEC_SERVER")
-    ref = env("ONEC_REF")
+def resolve_ib(target: str = "dev") -> str:
+    """Resolve file IB path for target: dev (sandbox) or work (with storage)."""
+    t = (target or "dev").strip().lower()
+    if t in ("dev", "develop", "sandbox", "base2"):
+        path = env("ONEC_IB_DEV") or env("ONEC_IB")
+        label = "ONEC_IB_DEV / ONEC_IB"
+    elif t in ("work", "prod", "base3"):
+        path = env("ONEC_IB_WORK")
+        label = "ONEC_IB_WORK"
+    else:
+        raise ValueError(f"Unknown IB target: {target!r} (use 'dev' or 'work')")
+    if not path:
+        raise ValueError(f"Set {label} for target={t}")
+    return path
+
+
+def build_ib_args(target: str = "dev") -> list[str]:
+    """Build /F or /S auth args. File IB prefers ONEC_IB_DEV/WORK; server uses ONEC_SERVER+ONEC_REF."""
     user = env("ONEC_USER", "")
     password = env("ONEC_PASSWORD", "")
     args: list[str] = []
-    if ib:
+    # Prefer explicit file targets
+    try:
+        ib = resolve_ib(target)
         args.extend(["/F", ib])
-    elif server and ref:
-        args.extend(["/S", f"{server}\\{ref}"])
-    else:
-        raise ValueError("Set ONEC_IB (file) or ONEC_SERVER+ONEC_REF (server)")
+    except ValueError:
+        server = env("ONEC_SERVER")
+        ref = env("ONEC_REF")
+        if server and ref:
+            args.extend(["/S", f"{server}\\{ref}"])
+        else:
+            raise
     if user:
         args.extend(["/N", user])
-    # Always pass /P (may be empty)
     args.extend(["/P", password or ""])
     return args
 
@@ -206,6 +222,7 @@ def run_designer(
     work_dir: Path | None = None,
     objects: list[str] | None = None,
     timeout_sec: int = 3600,
+    target: str = "dev",
 ) -> DesignerResult:
     onec_bin = require_env("ONEC_BIN")
     work = work_dir or Path(tempfile.mkdtemp(prefix="1c-mcp-"))
@@ -214,7 +231,7 @@ def run_designer(
     argv = [
         onec_bin,
         "DESIGNER",
-        *build_ib_args(),
+        *build_ib_args(target=target),
         "/DisableStartupDialogs",
         "/Out",
         str(log_path),
@@ -253,9 +270,54 @@ def run_designer(
     )
 
 
-def write_list_file(objects: list[str], path: Path) -> Path:
+TYPE_TO_FOLDER = {
+    "Document": "Documents",
+    "Catalog": "Catalogs",
+    "CommonModule": "CommonModules",
+    "InformationRegister": "InformationRegisters",
+    "AccumulationRegister": "AccumulationRegisters",
+    "DataProcessor": "DataProcessors",
+    "Report": "Reports",
+    "Enum": "Enums",
+    "ChartOfCharacteristicTypes": "ChartsOfCharacteristicTypes",
+    "BusinessProcess": "BusinessProcesses",
+    "Task": "Tasks",
+    "Constant": "Constants",
+    "Role": "Roles",
+    "Subsystem": "Subsystems",
+    "AccountingRegister": "AccountingRegisters",
+    "CalculationRegister": "CalculationRegisters",
+    "ChartOfAccounts": "ChartsOfAccounts",
+    "ExchangePlan": "ExchangePlans",
+    "ChartOfCalculationTypes": "ChartsOfCalculationTypes",
+    "CommonForm": "CommonForms",
+    "CommonCommand": "CommonCommands",
+    "CommonTemplate": "CommonTemplates",
+    "CommonPicture": "CommonPictures",
+    "DefinedType": "DefinedTypes",
+    "FunctionalOption": "FunctionalOptions",
+    "SessionParameter": "SessionParameters",
+    "FilterCriterion": "FilterCriteria",
+    "HTTPService": "HTTPServices",
+    "WebService": "WebServices",
+    "WSReference": "WSReferences",
+    "XDTOPackage": "XDTOPackages",
+}
+
+
+def object_to_list_entry(name: str, *, for_load: bool = False) -> str:
+    """Metadata name for dump listFile; hierarchical relative path for load listFile."""
+    canon = normalize_object_name(name)
+    if not for_load or "." not in canon:
+        return canon
+    kind, obj = canon.split(".", 1)
+    folder = TYPE_TO_FOLDER.get(kind, kind + "s")
+    return f"{folder}/{obj}.xml"
+
+
+def write_list_file(objects: list[str], path: Path, *, for_load: bool = False) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    lines = [normalize_object_name(o) for o in objects if o.strip()]
+    lines = [object_to_list_entry(o, for_load=for_load) for o in objects if o.strip()]
     # UTF-8 with BOM helps Designer on Windows with Cyrillic
     path.write_text("\n".join(lines) + "\n", encoding="utf-8-sig")
     return path

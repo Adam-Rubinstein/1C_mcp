@@ -12,26 +12,34 @@ from onec_mcp_shared import (  # noqa: E402
     load_env_files,
     normalize_object_name,
     now_stamp,
+    resolve_ib,
     run_designer,
     write_list_file,
 )
 from onec_mcp_shared.server_run import make_mcp, run_mcp  # noqa: E402
+from onec_mcp_shared.session import with_managed_session  # noqa: E402
 
-load_env_files(Path(__file__).with_name(".env"), Path.cwd() / ".env")
+load_env_files(Path(__file__).with_name(".env"), Path.cwd() / ".env", Path(_ROOT).parent / ".env")
 
 mcp = make_mcp("1c-load")
 
 
 @mcp.tool()
 def load_status() -> str:
+    dev = env("ONEC_IB_DEV") or env("ONEC_IB")
+    work = env("ONEC_IB_WORK")
     return json_result(
         {
             "onecBin": env("ONEC_BIN"),
             "onecBinExists": Path(env("ONEC_BIN", "") or ".").is_file(),
+            "ibDev": dev,
+            "ibDevExists": Path(dev or ".").is_dir(),
+            "ibWork": work,
+            "ibWorkExists": Path(work or ".").is_dir() if work else False,
             "repoCf": env("REPO_CF"),
             "repoCfe": env("REPO_CFE"),
-            "ok": Path(env("ONEC_BIN", "") or ".").is_file()
-            and bool(env("ONEC_IB") or (env("ONEC_SERVER") and env("ONEC_REF"))),
+            "ok": Path(env("ONEC_BIN", "") or ".").is_file() and Path(dev or ".").is_dir(),
+            "note": "Default target=dev. Use target=work only when ready; manage_session closes/reopens 1C.",
         }
     )
 
@@ -42,10 +50,17 @@ def load_objects(
     source_dir: str | None = None,
     extension: str | bool | None = None,
     confirm: bool = False,
+    target: str = "dev",
+    manage_session: bool = False,
+    force_close: bool = False,
+    restart_even_on_fail: bool = True,
 ) -> str:
     """
     Partial load XML into IB via /LoadConfigFromFiles -listFile.
-    confirm=true is required. On storage lock errors returns objectsToCapture list.
+    confirm=true required.
+    target: 'dev' (InfoBase2, default) or 'work' (InfoBase3).
+    manage_session: close 1C on that IB, load, restart with /N /P.
+    On storage lock returns objectsToCapture.
     """
     if not confirm:
         return json_result(
@@ -56,6 +71,11 @@ def load_objects(
         )
     if not objects:
         return json_result({"ok": False, "error": "objects is required"})
+
+    try:
+        ib = resolve_ib(target)
+    except ValueError as exc:
+        return json_result({"ok": False, "error": str(exc)})
 
     ext_name = None
     if extension is True:
@@ -71,29 +91,49 @@ def load_objects(
     work.mkdir(parents=True, exist_ok=True)
     list_file = work / "objects.txt"
     canon = [normalize_object_name(o) for o in objects]
-    write_list_file(canon, list_file)
+    write_list_file(canon, list_file, for_load=True)
 
     args = ["/LoadConfigFromFiles", str(src)]
     if ext_name:
         args.extend(["-Extension", ext_name])
     args.extend(["-listFile", str(list_file), "-Format", "Hierarchical"])
 
-    result = run_designer(args, work_dir=work, objects=canon)
+    def _do_load():
+        return run_designer(args, work_dir=work, objects=canon, target=target)
+
+    session_meta = None
+    try:
+        if manage_session:
+            result, session_meta = with_managed_session(
+                ib,
+                _do_load,
+                force_close=force_close,
+                restart_even_on_fail=restart_even_on_fail,
+            )
+        else:
+            result = _do_load()
+    except Exception as exc:  # noqa: BLE001
+        return json_result({"ok": False, "error": str(exc), "session": session_meta})
+
     payload = result.to_dict()
+    payload["ib"] = ib
+    payload["target"] = target
+    if session_meta:
+        payload["session"] = session_meta
     if result.storage_error or result.objects_to_capture:
         payload["message"] = (
             "Load failed due to configuration storage / object locks. "
-            "Capture these objects for editing, then retry load_objects: "
+            "Capture these objects, then retry: "
             + ", ".join(result.objects_to_capture or canon)
         )
         payload["objectsToCapture"] = result.objects_to_capture or canon
         payload["ok"] = False
     elif result.exit_code != 0:
-        payload["message"] = "Designer failed. See logTail. If metadata structure changed, update DB configuration in Designer."
+        payload["message"] = "Designer failed. See logTail. Update DB configuration in Designer if metadata changed."
         payload["ok"] = False
     else:
         payload["ok"] = True
-        payload["message"] = "Load finished. If metadata changed, update database configuration in Designer."
+        payload["message"] = "Load finished. If metadata structure changed, update database configuration in Designer."
     return json_result(payload)
 
 
