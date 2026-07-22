@@ -1,0 +1,14 @@
+# Работает и на Intel, и на Apple Silicon
+FROM eclipse-temurin:17-jre-jammy
+
+WORKDIR /app
+COPY 1C_mcp_bsl.jar /app/1C_mcp_bsl.jar
+
+# Create directory for 1C platform files
+RUN mkdir -p /app/1c-platform
+
+# Expose the port for SSE
+EXPOSE 8080
+
+# Run the application in SSE mode
+CMD ["java", "-jar", "/app/1C_mcp_bsl.jar", "--mode", "sse", "--platform-path", "/app/1c-platform", "--port", "8080"]

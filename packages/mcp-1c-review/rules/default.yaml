@@ -1,0 +1,38 @@
+# Default review checklist (portable). Override with REVIEW_RULES_PATH.
+# Estet-specific rules can live in a project file (not committed secrets).
+
+rules:
+  - id: no-current-date
+    title: Use session date on server
+    severity: error
+    file_glob: "*.bsl"
+    pattern: 'ТекущаяДата\s*\('
+    message: "Prefer ТекущаяДатаСеанса() on server (v8std time zones)."
+
+  - id: empty-exception
+    title: Empty exception handler
+    severity: error
+    file_glob: "*.bsl"
+    pattern: 'Исключение\s*\n\s*КонецПопытки'
+    message: "Never use empty Исключение; log ОписаниеОшибки() or rethrow."
+
+  - id: select-star
+    title: SELECT *
+    severity: warning
+    file_glob: "*.bsl"
+    pattern: 'ВЫБРАТЬ\s+\*'
+    message: "Avoid ВЫБРАТЬ *; list fields explicitly."
+
+  - id: vendor-module-edit-hint
+    title: Project logic in vendor modules (manual)
+    severity: info
+    file_glob: "*.bsl"
+    pattern: 'ПродолжитьВызов\s*\('
+    message: "Extension &Вместо should call ПродолжитьВызов; &ИзменениеИКонтроль must not."
+
+  - id: no-n-plus-one-hint
+    title: Query inside loop (heuristic)
+    severity: warning
+    file_glob: "*.bsl"
+    pattern: 'Для\s+Каждого[\s\S]{0,200}Новый\s+Запрос'
+    message: "Possible N+1: query constructed inside loop — use batch/VT."

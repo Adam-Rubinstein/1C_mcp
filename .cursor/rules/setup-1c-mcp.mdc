@@ -1,0 +1,18 @@
+---
+description: When setting up 1C MCP toolkit for a user or project, follow the agent checklist and write gitignored secrets only.
+globs:
+alwaysApply: false
+---
+
+# Setup 1C MCP
+
+When the user asks to install, configure, or connect **1C MCP** (`1C_mcp`, dump/load/platform/com servers):
+
+1. Read [docs/AGENT_SETUP.md](../../docs/AGENT_SETUP.md) and ask only missing checklist items.
+2. Prefer remote SSE + Bearer if they have a server; otherwise local stdio.
+3. Write secrets to `.local/mcp.env` or Cursor `mcp.json` `env` — **never commit** tokens/passwords/IB paths to public git.
+4. Platform API tools: launch the **JAR** (`packages/mcp-1c-platform/runtime/1C_mcp_bsl.jar`), not only the Python status wrapper.
+5. After config: run `python scripts/smoke_test.py` and tell the user to Reload Window.
+6. Dump/load against live IB only when credentials and paths are confirmed.
+
+Do not invent Designer CLI flags; partial dump uses `-listFile` then `-Format Hierarchical`. Load requires `confirm=true`. Storage failures must surface `objectsToCapture`.

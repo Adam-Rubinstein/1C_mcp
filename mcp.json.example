@@ -1,0 +1,66 @@
+{
+  "mcpServers": {
+    "1c-platform": {
+      "command": "java",
+      "args": [
+        "-Dfile.encoding=UTF-8",
+        "-jar",
+        "C:/Tools/1C_mcp/packages/mcp-1c-platform/runtime/1C_mcp_bsl.jar",
+        "--platform-path",
+        "C:/Program Files/1cv8/8.3.27.1719"
+      ]
+    },
+    "1c-dump": {
+      "command": "C:/Tools/1C_mcp/.venv/Scripts/python.exe",
+      "args": ["C:/Tools/1C_mcp/scripts/run_server.py", "dump"],
+      "env": {
+        "MCP_TRANSPORT": "stdio",
+        "ONEC_BIN": "C:/Program Files/1cv8/8.3.27.1719/bin/1cv8.exe",
+        "ONEC_IB": "C:/path/to/InfoBase",
+        "ONEC_USER": "Administrator",
+        "ONEC_PASSWORD": "",
+        "ONEC_EXTENSION": "MyExtension",
+        "REPO_CF": "C:/path/to/repo/src/cf",
+        "REPO_CFE": "C:/path/to/repo/src/cfe",
+        "DUMP_TMP_ROOT": "C:/Tools/1C_mcp/.tmp/dump"
+      }
+    },
+    "1c-load": {
+      "command": "C:/Tools/1C_mcp/.venv/Scripts/python.exe",
+      "args": ["C:/Tools/1C_mcp/scripts/run_server.py", "load"],
+      "env": {
+        "MCP_TRANSPORT": "stdio",
+        "ONEC_BIN": "C:/Program Files/1cv8/8.3.27.1719/bin/1cv8.exe",
+        "ONEC_IB": "C:/path/to/InfoBase",
+        "ONEC_USER": "Administrator",
+        "ONEC_PASSWORD": "",
+        "ONEC_EXTENSION": "MyExtension",
+        "REPO_CF": "C:/path/to/repo/src/cf",
+        "REPO_CFE": "C:/path/to/repo/src/cfe"
+      }
+    },
+    "1c-files": {
+      "command": "C:/Tools/1C_mcp/.venv/Scripts/python.exe",
+      "args": ["C:/Tools/1C_mcp/scripts/run_server.py", "files"],
+      "env": {
+        "MCP_TRANSPORT": "stdio",
+        "REPO_CF": "C:/path/to/repo/src/cf",
+        "REPO_CFE": "C:/path/to/repo/src/cfe",
+        "CONFIG_DUMP_DIR": "C:/path/to/repo/src/cf"
+      }
+    },
+    "1c-review": {
+      "command": "C:/Tools/1C_mcp/.venv/Scripts/python.exe",
+      "args": ["C:/Tools/1C_mcp/scripts/run_server.py", "review"],
+      "env": {
+        "MCP_TRANSPORT": "stdio"
+      }
+    },
+    "1c-dump-remote-example": {
+      "url": "http://YOUR_HOST:8761/sse",
+      "headers": {
+        "Authorization": "Bearer YOUR_MCP_TOKEN"
+      }
+    }
+  }
+}

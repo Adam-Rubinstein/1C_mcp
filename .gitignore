@@ -1,48 +1,41 @@
-# Локальный MCP (пути к Java / JAR / платформе)
-.cursor/mcp.json
+# Secrets & local config
+.env
+.env.*
+!.env.example
+!.env.*.example
+.local/
+**/.local/
+*.pem
+id_ed25519*
+*.wg.conf
 
-# --- Kotlin / Gradle (MCP-сервер в корне репозитория) ---
-.gradle/
-build/
-!gradle/wrapper/gradle-wrapper.jar
-!**/src/main/**/build/
-!**/src/test/**/build/
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.tmp/
+.coverage
+htmlcov/
 
-### IntelliJ IDEA ###
-.idea
-!.idea/codeStyles/*
-*.iws
-*.iml
-*.ipr
-out/
-!**/src/main/**/out/
-!**/src/test/**/out/
+# Designer dumps
+**/designer.out
+.dump-cache/
 
-### Eclipse ###
-.apt_generated
-.classpath
-.factorypath
-.project
-.settings
-.springBeans
-.sts4-cache
-bin/
-!**/src/main/**/bin/
-!**/src/test/**/bin/
-
-### NetBeans (корневой dist/ с JAR не игнорируем — см. README) ###
-/nbproject/private/
-/nbbuild/
-/nbdist/
-/.nb-gradle/
-
-### VS Code ###
+# IDE / OS
+.idea/
 .vscode/
-
-### Mac OS ###
+*.swp
+Thumbs.db
 .DS_Store
 
-*.log
-*.gz
-*.tmp
-/.kotlin
+# Build (legacy kotlin)
+legacy/kotlin-platform/build/
+legacy/kotlin-platform/.gradle/
+legacy/kotlin-platform/out/
+
+# Keep runtime jar
+!packages/mcp-1c-platform/runtime/*.jar
+!dist/*.jar

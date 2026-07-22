@@ -1,0 +1,135 @@
+# Operator guide — 1C MCP Toolkit
+
+## Architecture
+
+```
+Cursor / Agent
+    │  stdio (local) or HTTP SSE + Bearer (remote)
+    ▼
+┌─────────────┐  ┌──────┐  ┌──────┐  ┌─────┐  ┌───────┐
+│ platform JAR│  │ dump │  │ load │  │ com │  │ files │ …
+└──────┬──────┘  └──┬───┘  └──┬───┘  └──┬──┘  └───┬───┘
+       │            │         │         │          │
+       ▼            ▼         ▼         ▼          ▼
+  1cv8 HBK/help   DESIGNER  DESIGNER   COM      XML/BSL dump on disk
+```
+
+Python packages share `onec_mcp_shared` (env, Designer runner, listFile BOM, storage-error parsing, merge-copy).
+
+## Environment variables
+
+See [`.env.example`](../.env.example).
+
+| Variable | Used by | Purpose |
+|----------|---------|---------|
+| `ONEC_BIN` | dump, load | Path to `1cv8.exe` |
+| `ONEC_IB` or `ONEC_SERVER`+`ONEC_REF` | dump, load, com, journal | Infobase |
+| `ONEC_USER` / `ONEC_PASSWORD` | same | Auth |
+| `ONEC_EXTENSION` | dump, load | Extension name for `-Extension` |
+| `REPO_CF` / `REPO_CFE` | dump, load, files | Config dump roots in git |
+| `CONFIG_DUMP_DIR` | files | Search root (often = `REPO_CF`) |
+| `ONEC_PLATFORM_PATH` | platform JAR | Version dir with help |
+| `MCP_TRANSPORT` | all Python | `stdio` or `sse` |
+| `MCP_TOKEN` | Python SSE | Bearer token |
+| `DEBUG_SERVER_URL` | debug | `dbgs` HTTP endpoint |
+| `REVIEW_RULES_PATH` | review | Optional YAML override |
+
+## Dump
+
+### Partial objects
+
+Designer argument order (critical):
+
+```
+/DumpConfigToFiles <dir> [-Extension Name] -listFile <objects.txt> -Format Hierarchical
+```
+
+`objects.txt` is UTF-8 **with BOM**. Names may be Russian (`Документ.X`) or English (`Document.X`); shared code normalizes to English type prefixes.
+
+Tool: `dump_objects(objects=[...], merge_into_repo=false, extension=false)`.
+
+### Incremental
+
+`dump_changes` uses:
+
+```
+-update -configDumpInfoForChanges <path/to/ConfigDumpInfo.xml> -Format Hierarchical
+```
+
+### Storage / locks
+
+If Designer log contains capture/lock phrases, result has:
+
+```json
+{
+  "ok": false,
+  "storageError": true,
+  "objectsToCapture": ["Document.Foo"],
+  "message": "… Capture these objects …"
+}
+```
+
+Agents must show that list and stop — never pretend success.
+
+## Load
+
+```
+/LoadConfigFromFiles <src> [-Extension Name] -listFile <objects.txt> -Format Hierarchical
+```
+
+- `confirm=true` required.
+- Same `objectsToCapture` behavior on lock.
+- After metadata change, user must update DB configuration in Designer (tool message reminds).
+
+## COM
+
+Windows only (`pywin32`). Connection string from `ONEC_IB` or server/ref. Tools: `com_ping`, `com_query`, `com_metadata_find`. Prefer read-only queries.
+
+## Files
+
+Searches `CONFIG_DUMP_DIR`, `REPO_CF`, `REPO_CFE`. Paths outside those roots are rejected by `files_read`.
+
+## Review
+
+Default rules: `packages/mcp-1c-review/rules/default.yaml`. Project-specific rules: set `REVIEW_RULES_PATH` (do not commit secrets).
+
+## Journal
+
+COM unload of event log to a temp XML; best-effort parse. Needs privileges.
+
+## Debug
+
+HTTP client toward `DEBUG_SERVER_URL` (platform `dbgs` / community debug MCP shapes). Live attach needs a running debug server — see [PavRedAlex/1c-debug-mcp](https://github.com/PavRedAlex/1c-debug-mcp).
+
+## Deploy on Windows host (adam)
+
+1. Clone repo to e.g. `C:\Tools\1C_mcp`.
+2. `python -m venv .venv` && `pip install -r requirements.txt`.
+3. Create `C:\Tools\1C_mcp\.env` from `.env.example` (IB paths, `MCP_TOKEN`).
+4. Run `scripts\deploy\install_services.ps1` **or** start each server in a scheduled task / NSSM:
+
+```powershell
+$env:MCP_TRANSPORT = "sse"
+$env:MCP_PORT = "8761"
+# load .env somehow, or use dotenv in process
+.\.venv\Scripts\python.exe scripts\run_server.py dump
+```
+
+5. Open firewall for ports you expose (or bind to VPN IP only).
+6. Point Cursor `url` + `Authorization: Bearer …` — token only on client PC and server disk.
+
+## Smoke tests (no IB)
+
+```bash
+python scripts/smoke_test.py
+```
+
+Live dump/load/com require IB (configure later).
+
+## Platform JAR rebuild (optional)
+
+```bash
+cd legacy/kotlin-platform
+./gradlew build
+# copy jar to packages/mcp-1c-platform/runtime/
+```

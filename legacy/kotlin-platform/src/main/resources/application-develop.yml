@@ -1,0 +1,6 @@
+# Профиль разработки
+logging:
+  config:
+  level:
+    root: INFO
+    io.github.adamrubinstein.mcpbsl: DEBUG

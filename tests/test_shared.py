@@ -1,0 +1,135 @@
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "packages" / "shared"))
+
+from onec_mcp_shared import (  # noqa: E402
+    merge_copy,
+    normalize_object_name,
+    parse_storage_errors,
+    redact_cmd,
+    write_list_file,
+)
+
+
+def test_normalize_object_name_ru():
+    assert normalize_object_name("Документ.Эст_Выпуск") == "Document.Эст_Выпуск"
+    assert normalize_object_name("Document.Foo") == "Document.Foo"
+    assert normalize_object_name("ОбщийМодуль.Эст_Дополнительно") == "CommonModule.Эст_Дополнительно"
+
+
+def test_write_list_file_bom(tmp_path: Path):
+    p = tmp_path / "objects.txt"
+    write_list_file(["Документ.A", "Catalog.B"], p)
+    raw = p.read_bytes()
+    assert raw.startswith(b"\xef\xbb\xbf")
+    text = p.read_text(encoding="utf-8-sig")
+    assert "Document.A" in text
+    assert "Catalog.B" in text
+
+
+def test_parse_storage_errors():
+    log = "Объект Документ.Foo не захвачен в хранилище конфигурации"
+    err, objs = parse_storage_errors(log, ["Document.Foo", "Document.Bar"])
+    assert err is True
+    assert "Document.Foo" in objs
+
+
+def test_parse_storage_no_false_positive():
+    err, objs = parse_storage_errors("Выгрузка завершена успешно", ["Document.Foo"])
+    assert err is False
+    assert objs == []
+
+
+def test_redact_password():
+    cmd = ["1cv8", "DESIGNER", "/F", "C:\\ib", "/N", "Admin", "/P", "secret"]
+    red = redact_cmd(cmd)
+    assert "secret" not in red
+    assert "***" in red
+
+
+def test_merge_copy(tmp_path: Path):
+    src = tmp_path / "src"
+    dst = tmp_path / "dst"
+    (src / "Documents").mkdir(parents=True)
+    (src / "Documents" / "A.xml").write_text("<x/>", encoding="utf-8")
+    (dst / "Documents").mkdir(parents=True)
+    (dst / "Documents" / "A.xml").write_text("<old/>", encoding="utf-8")
+    report = merge_copy(src, dst)
+    assert "Documents/A.xml" in report["overwrite"]
+    assert (dst / "Documents" / "A.xml").read_text(encoding="utf-8") == "<x/>"
+
+
+def test_designer_result_json_roundtrip():
+    from onec_mcp_shared import DesignerResult
+
+    r = DesignerResult(
+        exit_code=1,
+        log_path="x",
+        log_tail="захват объекта Document.Foo",
+        command=["1cv8"],
+        storage_error=True,
+        objects_to_capture=["Document.Foo"],
+    )
+    d = r.to_dict()
+    assert d["ok"] is False
+    assert d["objectsToCapture"] == ["Document.Foo"]
+    assert json.loads(json.dumps(d))
+
+
+def test_files_search_on_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    root = tmp_path / "cf"
+    mod = root / "Documents" / "X" / "Ext"
+    mod.mkdir(parents=True)
+    (mod / "ObjectModule.bsl").write_text("Процедура Тест()\n\tА = ТекущаяДата();\nКонецПроцедуры\n", encoding="utf-8")
+    monkeypatch.setenv("REPO_CF", str(root))
+    monkeypatch.setenv("CONFIG_DUMP_DIR", str(root))
+
+    # import files server helpers
+    sys.path.insert(0, str(ROOT / "packages" / "mcp-1c-files"))
+    # load module as file
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "files_server", ROOT / "packages" / "mcp-1c-files" / "server.py"
+    )
+    mod_s = importlib.util.module_from_spec(spec)
+    # Avoid running main
+    assert spec and spec.loader
+    # server imports mcp — may fail if mcp not installed; skip if so
+    try:
+        spec.loader.exec_module(mod_s)
+    except Exception as exc:  # noqa: BLE001
+        pytest.skip(f"mcp not importable: {exc}")
+    result = json.loads(mod_s.files_search("ТекущаяДата"))
+    assert result["ok"] is True
+    assert result["count"] >= 1
+
+
+def test_review_check_pattern(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    sys.path.insert(0, str(ROOT / "packages" / "mcp-1c-review"))
+    import importlib.util
+
+    rules = ROOT / "packages" / "mcp-1c-review" / "rules" / "default.yaml"
+    monkeypatch.setenv("REVIEW_RULES_PATH", str(rules))
+    spec = importlib.util.spec_from_file_location(
+        "review_server", ROOT / "packages" / "mcp-1c-review" / "server.py"
+    )
+    assert spec and spec.loader
+    mod_s = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(mod_s)
+    except Exception as exc:  # noqa: BLE001
+        pytest.skip(f"mcp not importable: {exc}")
+    # unicode escapes so source file encoding cannot break the test
+    sample = "\u041f\u0440\u043e\u0446\u0435\u0434\u0443\u0440\u0430 \u0410()\n\t\u0414 = \u0422\u0435\u043a\u0443\u0449\u0430\u044f\u0414\u0430\u0442\u0430();\n\u041a\u043e\u043d\u0435\u0446\u041f\u0440\u043e\u0446\u0435\u0434\u0443\u0440\u044b\n"
+    result = json.loads(mod_s.review_check(text=sample))
+    assert result["ok"] is True
+    ids = {f["rule"] for f in result["findings"]}
+    assert "no-current-date" in ids
