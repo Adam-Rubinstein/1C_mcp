@@ -326,8 +326,8 @@ def main() -> int:
         st = parse_json_or_text(mod.dump_status())
         record("1c-dump", "dump_status", isinstance(st, dict) and st.get("ok") is not False, json.dumps(st, ensure_ascii=False)[:250] if isinstance(st, dict) else str(st))
         mod = load_mod("load", packages["load"])
-        st = parse_json_or_text(mod.load_status())
-        record("1c-load", "load_status", isinstance(st, dict) and st.get("ok") is not False, json.dumps(st, ensure_ascii=False)[:250] if isinstance(st, dict) else str(st))
+        st = parse_json_or_text(mod.load_health())
+        record("1c-load", "load_health", isinstance(st, dict) and st.get("ok") is not False, json.dumps(st, ensure_ascii=False)[:250] if isinstance(st, dict) else str(st))
         gate = parse_json_or_text(mod.load_objects(objects=["Document.X"], confirm=False))
         record("1c-load", "confirm gate", isinstance(gate, dict) and gate.get("ok") is False, json.dumps(gate, ensure_ascii=False)[:200] if isinstance(gate, dict) else str(gate))
     except Exception as exc:

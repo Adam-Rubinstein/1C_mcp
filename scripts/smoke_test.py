@@ -135,7 +135,7 @@ def main() -> int:
                 else:
                     fail(f"dump_status: {st}")
             elif name == "load":
-                st = json.loads(mod.load_status())
+                st = json.loads(mod.load_health())
                 bad = json.loads(mod.load_objects(objects=["Document.X"], confirm=False))
                 work_gate = json.loads(
                     mod.load_objects(objects=["Document.X"], confirm=True, target="work", storage_captured=False)
@@ -149,7 +149,7 @@ def main() -> int:
                     and prep.get("ok")
                     and prep.get("stop") is True
                 ):
-                    ok("load_status + confirm + work storage gate + prepare")
+                    ok("load_health + confirm + work storage gate + prepare")
                 else:
                     fail(f"load: {st} {bad} {work_gate} {prep}")
             elif name == "debug":

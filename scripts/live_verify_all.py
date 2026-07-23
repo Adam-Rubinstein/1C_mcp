@@ -127,8 +127,8 @@ def main() -> int:
 
     # --- load LIVE ---
     m = load("load", "mcp-1c-load")
-    st = json.loads(m.load_status())
-    rec("load", "load_status", st.get("ok") is True, "ok")
+    st = json.loads(m.load_health())
+    rec("load", "load_health", st.get("ok") is True, "ok")
     gate = json.loads(m.load_objects(objects=["Document.X"], confirm=False))
     rec("load", "confirm_gate", gate.get("ok") is False, gate.get("error", "")[:120])
     if not dev_busy:

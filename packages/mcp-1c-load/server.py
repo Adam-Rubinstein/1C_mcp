@@ -36,9 +36,7 @@ def _canon_objects(objects: list[str]) -> list[str]:
     return [normalize_object_name(o) for o in objects if (o or "").strip()]
 
 
-@mcp.tool(name="load_status")
-def load_status(verbose: bool = False) -> str:
-    """Health check for 1c-load: paths, IB, and that load_prepare_work is available."""
+def _health_payload(verbose: bool = False) -> dict:
     dev = env("ONEC_IB_DEV") or env("ONEC_IB")
     work = env("ONEC_IB_WORK")
     payload: dict = {
@@ -52,16 +50,11 @@ def load_status(verbose: bool = False) -> str:
         "repoCfe": env("REPO_CFE"),
         "ok": Path(env("ONEC_BIN", "") or ".").is_file() and Path(dev or ".").is_dir(),
         "storagePathSet": bool((env("ONEC_STORAGE_PATH") or "").strip()),
-        "tools": ["load_status", "load_prepare_work", "load_objects"],
+        "tools": ["load_prepare_work", "load_objects", "load_health"],
         "mcpLoadRev": env("MCP_LOAD_REV") or "3",
         "note": (
-            "Default target=dev (sandbox, agent-only — never reopen for user). "
-            "target=work requires confirm=true AND storage_captured=true "
-            "(user must capture objects in configuration repository first). "
-            "Call load_prepare_work ONLY if capture is not yet confirmed; "
-            "if user already said captured/do it — load_objects with storage_captured=true immediately. "
-            "On work + manage_session: reopen like 1C starter (/IBName + WORK user). "
-            "Optional ONEC_STORAGE_* for explicit /ConfigurationRepository*."
+            "Default target=dev. WORK needs confirm=true and storage_captured=true. "
+            "Use load_prepare_work only if capture not confirmed; if user said do-it — load immediately."
         ),
     }
     if verbose:
@@ -73,7 +66,7 @@ def load_status(verbose: bool = False) -> str:
             "можно грузить",
             "грузи",
         ]
-    return json_result(payload)
+    return payload
 
 
 @mcp.tool(name="load_prepare_work")
@@ -83,8 +76,7 @@ def load_prepare_work(
 ) -> str:
     """
     Checklist before WORK load when capture is NOT yet confirmed.
-    Skip this tool if the user already said they captured objects / «делай».
-    Does not run Designer.
+    Skip if user already said captured / «делай». Does not run Designer.
     """
     if not objects:
         return json_result({"ok": False, "error": "objects is required"})
@@ -149,22 +141,7 @@ def load_objects(
     reopen_designer: bool | None = None,
     restart_even_on_fail: bool = True,
 ) -> str:
-    """
-    Partial load XML into IB via /LoadConfigFromFiles -listFile.
-    confirm=true required always.
-    target=work ALSO requires storage_captured=true — after the user captured
-    objects (or already said so: «я захватил» / «делай»). If capture is not
-    confirmed yet, call load_prepare_work first and STOP; if already confirmed,
-    call this immediately with storage_captured=true (do not stop again).
-    target: 'dev' (InfoBase2 sandbox) or 'work' (InfoBase3).
-    manage_session: close 1C only on the target IB, then load.
-    reopen_designer: None = auto (True on work, False on dev). Work reopen uses
-    /IBName + WORK user (starter-like) so storage binding on the IB comes back.
-    Optional ONEC_STORAGE_* adds explicit /ConfigurationRepository*. Never reopens DEV.
-    On storage lock returns objectsToCapture.
-    objects: ONLY what belongs to the current task; do not load extra related metadata
-    unless the user explicitly asked.
-    """
+    """Partial load into IB. confirm=true required; WORK also needs storage_captured=true."""
     if not confirm:
         return json_result(
             {
@@ -270,6 +247,12 @@ def load_objects(
     if session_meta and session_meta.get("warning"):
         payload["sessionWarning"] = session_meta["warning"]
     return json_result(payload)
+
+
+@mcp.tool(name="load_health")
+def load_health(verbose: bool = False) -> str:
+    """Health: ONEC_BIN, DEV/WORK IB, repo paths; lists load tools."""
+    return json_result(_health_payload(verbose=verbose))
 
 
 def main() -> None:
