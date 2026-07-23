@@ -339,8 +339,8 @@ def main() -> int:
 
         real = sess._ibases_v8i_paths()
         record("session", "ibases.v8i", len(real) >= 2, str(real))
-        cmd_work = r'DESIGNER /IBName"ERP КОПИЯ" /AppAutoCheckMode'
-        cmd_dev = r'DESIGNER /IBName"ERP КОПИЯ запасная" /Lru'
+        cmd_work = r'DESIGNER /IBName "ERP КОПИЯ"'
+        cmd_dev = r'DESIGNER /IBName "ERP КОПИЯ запасная" /Lru'
         ok_exact = (
             sess._cmdline_matches_ib(cmd_dev, r"C:\Users\rubinshtein\Documents\InfoBase2")
             and not sess._cmdline_matches_ib(cmd_dev, r"C:\Users\rubinshtein\Documents\InfoBase3")

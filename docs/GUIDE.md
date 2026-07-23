@@ -74,9 +74,10 @@ Agents must show that list and stop — never pretend success.
 ### Session management (`manage_session`)
 
 - Closes **only** the IB from `target` (strict `/F` path or exact `/IBName` from `ibases.v8i`).
-- `reopen_designer`: auto **True on work**, **False on dev**. Work reopen uses `/IBName"<title>"` + IB user (starter-like) so configuration repository restores from IB binding — not bare `/F`.
+- `reopen_designer`: auto **True on work**, **False on dev**. Work reopen: `DESIGNER /IBName` + IB title (two argv) + IB user — not bare `/F`, not `/AppAutoCheckMode`, not one argv `/IBName"…"`.
 - Optional explicit storage CLI: set `ONEC_STORAGE_PATH` / `ONEC_STORAGE_USER` / `ONEC_STORAGE_PASSWORD`.
 - Never default-open Designer when no session was open on that IB; never reopen DEV for the user.
+- **Adopted UUID gate:** before prepare/load, `ExtendedConfigurationObject` in `REPO_CFE` must equal Attribute `uuid` in `REPO_CF` for the same attribute name. On mismatch → `ok=false`, step `fix_adopted_uuids`. New Adopted attrs require loading the **main** CF object, not only the extension.
 
 ## Load
 

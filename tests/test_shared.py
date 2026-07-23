@@ -88,8 +88,8 @@ def test_cmdline_matches_ib_exact_name(monkeypatch: pytest.MonkeyPatch):
         "ERP КОПИЯ запасная": r"C:\Users\rubinshtein\Documents\InfoBase2",
     }
     monkeypatch.setattr(sess, "_ibases_v8i_paths", lambda: mapping)
-    cmd_work = r'DESIGNER /IBName"ERP КОПИЯ" /AppAutoCheckMode'
-    cmd_dev = r'DESIGNER /IBName"ERP КОПИЯ запасная" /Lru'
+    cmd_work = r'DESIGNER /IBName "ERP КОПИЯ"'
+    cmd_dev = r'DESIGNER /IBName "ERP КОПИЯ запасная" /Lru'
     assert sess._cmdline_matches_ib(cmd_dev, mapping["ERP КОПИЯ запасная"])
     assert not sess._cmdline_matches_ib(cmd_dev, mapping["ERP КОПИЯ"])
     assert sess._cmdline_matches_ib(cmd_work, mapping["ERP КОПИЯ"])

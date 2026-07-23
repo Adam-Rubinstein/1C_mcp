@@ -52,9 +52,10 @@ MCP (Model Context Protocol) — способ подключить к ИИ-ре�
 
 - Правки только в файлах `src/cf` — монополия **не нужна**.
 - Load в **dev**, пока вы сидите в Конфигураторе на **work** — обычно **ок**.
-- Load в **ту же** базу, где открыт Конфигуратор — `manage_session=true`: сервер **закроет только эту ИБ**, зальёт, и на **work** снова откроет Конфигуратор **как из списка баз** (`/IBName"ERP КОПИЯ"` + `ONEC_USER_WORK`) — так поднимается привязка хранилища. Не сырой `/F`.
+- Load в **ту же** базу, где открыт Конфигуратор — `manage_session=true`: сервер **закроет только эту ИБ**, зальёт, и на **work** снова откроет **Конфигуратор**: `1cv8 DESIGNER /IBName` + имя ИБ (два argv) + `ONEC_USER_WORK`. Не сырой `/F`, не `/AppAutoCheckMode`, не один argv `/IBName"…"`.
 - **Не** поднимать DEV (InfoBase2) пользователю — это песочница агента.
-- Опционально `ONEC_STORAGE_*` — явный `/ConfigurationRepository*` при reopen.
+- Optional `ONEC_STORAGE_*` — explicit `/ConfigurationRepository*` on reopen.
+- **Adopted UUID gate:** before `load_prepare_work` / `load_objects`, MCP compares cfe `ExtendedConfigurationObject` to main CF Attribute `uuid`. Mismatch → refuse load (`fix_adopted_uuids`). Do not invent UUIDs; load **main** CF first for new Adopted attrs.
 
 Если объекты в **хранилище** не захвачены, load вернёт `objectsToCapture` — не «тихий» успех.
 

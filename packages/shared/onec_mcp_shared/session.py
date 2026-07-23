@@ -89,7 +89,7 @@ def _cmdline_matches_ib(cmdline: str, ib_path: str | Path) -> bool:
     cmd_n = _norm(cmd.replace('"', ""))
     if _path_token_in_cmdline(cmd_n, needle):
         return True
-    m = re.search(r'/IBName"?([^"/]+)"?', cmd, flags=re.IGNORECASE)
+    m = re.search(r'/IBName\s*"?([^"]+)"?', cmd, flags=re.IGNORECASE)
     if m:
         name = m.group(1).strip()
         mapping = _ibases_v8i_paths()
@@ -200,10 +200,12 @@ def start_ib_session(
     """
     Start Designer/Enterprise for an IB.
 
-    Interactive reopen (like_starter=True): launch like 1C starter via
-    /IBName"<title from ibases.v8i>" + IB user — restores configuration
+    Interactive reopen (like_starter=True): launch Configurator/Enterprise via
+    /IBName + title (two argv) + IB user — restores configuration
     repository binding already stored on the IB. Prefer list argv (Unicode-safe);
     do not use a bare /F path for interactive WORK reopen (drops storage).
+    Do NOT pass /AppAutoCheckMode — with explicit DESIGNER/ENTERPRISE it opens
+    the "Запуск 1С:Предприятия" list instead of Configurator.
 
     Optional ONEC_STORAGE_* adds /ConfigurationRepository* when attach_storage
     is True or None and path is set.
@@ -215,9 +217,11 @@ def start_ib_session(
     argv = [onec_bin, mode_arg]
     launch = "F"
     if like_starter and ib_name:
-        # One argv token keeps Cyrillic IB titles intact under CreateProcessW.
-        argv.append(f'/IBName"{ib_name}"')
-        argv.append("/AppAutoCheckMode")
+        # Two argv tokens: /IBName + title. Do NOT use /IBName"Title" as one
+        # token — CreateProcessW re-quotes it to "/IBName\"Title\"" and 1C
+        # fails to parse → opens «Запуск 1С:Предприятия» instead of DESIGNER.
+        # No /AppAutoCheckMode for the same reason (mode list / launcher).
+        argv.extend(["/IBName", ib_name])
         launch = "IBName"
     else:
         argv.extend(["/F", str(ib_path)])

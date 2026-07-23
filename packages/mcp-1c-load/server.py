@@ -18,6 +18,7 @@ from onec_mcp_shared import (  # noqa: E402
 )
 from onec_mcp_shared.server_run import make_mcp, run_mcp  # noqa: E402
 from onec_mcp_shared.session import with_managed_session  # noqa: E402
+from onec_mcp_shared.adopt_check import check_adopted_uuids  # noqa: E402
 
 load_env_files(Path(__file__).with_name(".env"), Path.cwd() / ".env", Path(_ROOT).parent / ".env")
 
@@ -81,6 +82,23 @@ def load_prepare_work(
     if not objects:
         return json_result({"ok": False, "error": "objects is required"})
     canon = _canon_objects(objects)
+    adopt = check_adopted_uuids(canon, repo_cf=env("REPO_CF"), repo_cfe=env("REPO_CFE"))
+    if not adopt.get("ok", True) and not adopt.get("skipped"):
+        return json_result(
+            {
+                "ok": False,
+                "step": "fix_adopted_uuids",
+                "target": "work",
+                "objectsToCapture": canon,
+                "adoptCheck": adopt,
+                "message": (
+                    (adopt.get("message") or "Adopted UUID mismatch.")
+                    + "\nAlign cf Attribute uuid with cfe ExtendedConfigurationObject, "
+                    "then capture/load **main** CF object first."
+                ),
+                "stop": True,
+            }
+        )
     ext_name = None
     if extension is True:
         ext_name = env("ONEC_EXTENSION")
@@ -95,6 +113,7 @@ def load_prepare_work(
     if ext_name:
         lines.append("")
         lines.append(f"Расширение: {ext_name}")
+        lines.append("(При новых Adopted — сначала объект **основной** КФ, не только расширение.)")
     lines.extend(
         [
             "",
@@ -110,6 +129,7 @@ def load_prepare_work(
             "target": "work",
             "objectsToCapture": canon,
             "extension": ext_name,
+            "adoptCheck": adopt,
             "message": "\n".join(lines),
             "waitForUserPhrases": ["я захватил", "я всё захватил", "я все захватил", "делай", "можно грузить", "грузи"],
             "skipIfAlreadyCaptured": True,
@@ -159,14 +179,29 @@ def load_objects(
         return json_result({"ok": False, "error": str(exc)})
 
     t = (target or "dev").strip().lower()
+    canon = _canon_objects(objects)
+    adopt = check_adopted_uuids(canon, repo_cf=env("REPO_CF"), repo_cfe=env("REPO_CFE"))
+    if not adopt.get("ok", True) and not adopt.get("skipped"):
+        return json_result(
+            {
+                "ok": False,
+                "error": "Adopted UUID gate failed before load.",
+                "step": "fix_adopted_uuids",
+                "adoptCheck": adopt,
+                "objects": canon,
+                "message": adopt.get("message"),
+                "stop": True,
+            }
+        )
+
     if _is_work_target(t) and not storage_captured:
-        canon = _canon_objects(objects)
         return json_result(
             {
                 "ok": False,
                 "error": "Refusing load to WORK without storage_captured=true.",
                 "step": "capture_then_approve",
                 "objectsToCapture": canon,
+                "adoptCheck": adopt,
                 "message": (
                     "Сначала захватите в хранилище:\n"
                     + "\n".join(f"- {o}" for o in canon)
