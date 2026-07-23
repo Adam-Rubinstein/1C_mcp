@@ -173,8 +173,9 @@ def prepare_new_main_object(
                 "stagingDir": str(staging),
                 "message": (
                     "Staging failed. If Ext/ is missing from the IB dump, "
-                    "open WORK from the 1C list (storage connected) and retry prepare — "
-                    "do not copy Ext from git."
+                    "first call restore_configuration_ext(target=..., ext_donor=dev) "
+                    "(Ext was wiped — 5318), or reconnect storage and re-dump. "
+                    "Do not copy Ext from git."
                 ),
             }
         )

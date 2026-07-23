@@ -23,7 +23,7 @@ MCP (Model Context Protocol) — способ подключить к ИИ-ре�
 |-------|--------|
 | **1c-platform** | Справка по API платформы: `search`, `info`, `getMember`, `getMembers`, `getConstructors` (чистый Python, читает HBK) |
 | **1c-dump** | Частичная / инкрементальная выгрузка конфигурации из ИБ в файлы |
-| **1c-load** | Частичная загрузка в ИБ: `load_prepare_work`, `load_objects` (`confirm=true`), `load_health` |
+| **1c-load** | Частичная загрузка в ИБ: `load_prepare_work`, `prepare_new_main_object`, `restore_configuration_ext`, `load_objects` (`confirm=true`), `load_health` |
 | **1c-com** | Запросы и метаданные через COM (`V83.COMConnector`) |
 | **1c-files** | Поиск и чтение по каталогам выгрузки (`REPO_CF` / `REPO_CFE`) |
 | **1c-review** | Чеклист по BSL (паттерны из YAML) |
@@ -56,7 +56,7 @@ MCP (Model Context Protocol) — способ подключить к ИИ-ре�
 - **Не** поднимать DEV (InfoBase2) пользователю — это песочница агента.
 - Optional `ONEC_STORAGE_*` — explicit `/ConfigurationRepository*` on reopen.
 - **Adopted UUID gate:** before `load_prepare_work` / `load_objects`, MCP compares cfe `ExtendedConfigurationObject` to main CF Attribute `uuid`. Mismatch → refuse load (`fix_adopted_uuids`). Do not invent UUIDs; load **main** CF first for new Adopted attrs.
-- **Configuration root gate:** never load `Configuration.xml` from git/`REPO_CF`. Use `prepare_new_main_object` (dump root from the same IB → staging marker). Bare root load → `fix_configuration_root_source`.
+- **Configuration root / Ext gate (5318):** never load `Configuration.xml` from git/`REPO_CF`. Never load Configuration **without** required `Ext/` (wipes HomePage/CI on the IB). New object → `prepare_new_main_object` (dump root+Ext from same IB → staging). Ext wiped → `restore_configuration_ext`. Load listFile must use `Configuration.xml`. Dump of Configuration without Ext → `fix_configuration_ext_incomplete`.
 
 Если объекты в **хранилище** не захвачены, load вернёт `objectsToCapture` — не «тихий» успех.
 

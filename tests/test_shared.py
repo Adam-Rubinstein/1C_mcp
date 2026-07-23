@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT / "packages" / "shared"))
 from onec_mcp_shared import (  # noqa: E402
     merge_copy,
     normalize_object_name,
+    object_to_list_entry,
     parse_storage_errors,
     redact_cmd,
     write_list_file,
@@ -22,6 +23,13 @@ def test_normalize_object_name_ru():
     assert normalize_object_name("Документ.Эст_Выпуск") == "Document.Эст_Выпуск"
     assert normalize_object_name("Document.Foo") == "Document.Foo"
     assert normalize_object_name("ОбщийМодуль.Эст_Дополнительно") == "CommonModule.Эст_Дополнительно"
+
+
+def test_object_to_list_entry_configuration_load():
+    assert object_to_list_entry("Configuration", for_load=True) == "Configuration.xml"
+    assert object_to_list_entry("Конфигурация", for_load=True) == "Configuration.xml"
+    assert object_to_list_entry("Configuration", for_load=False) == "Configuration"
+    assert object_to_list_entry("Document.A", for_load=True) == "Documents/A.xml"
 
 
 def test_write_list_file_bom(tmp_path: Path):
