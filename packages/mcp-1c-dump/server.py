@@ -146,6 +146,20 @@ def dump_objects(
         payload["ok"] = True
         if result.exit_code != 0:
             payload["warning"] = "Designer non-zero exit, but object files were written"
+    if any(normalize_object_name(o).lower() in ("configuration", "конфигурация") for o in canon):
+        from onec_mcp_shared.config_root import configuration_ext_missing
+
+        missing_ext = configuration_ext_missing(dump_dir)
+        if missing_ext:
+            payload["ok"] = False
+            payload["step"] = "fix_configuration_ext_incomplete"
+            payload["missingExt"] = missing_ext
+            payload["message"] = (
+                "Configuration dump without Ext/ (UI files). "
+                "WORK batch /F dump often omits Ext when storage is disconnected. "
+                "Open IB from 1C list (storage connected) or set ONEC_STORAGE_*, "
+                "then re-dump. Never fill Ext from git REPO_CF."
+            )
     if result.storage_error:
         payload["message"] = (
             "Designer reported configuration storage / lock issue. Capture: "

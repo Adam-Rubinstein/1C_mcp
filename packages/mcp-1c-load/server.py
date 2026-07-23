@@ -21,6 +21,7 @@ from onec_mcp_shared.session import with_managed_session  # noqa: E402
 from onec_mcp_shared.adopt_check import check_adopted_uuids  # noqa: E402
 from onec_mcp_shared.config_root import (  # noqa: E402
     child_objects_count,
+    copy_configuration_ext,
     copy_object_tree,
     gate_configuration_root_load,
     includes_configuration_root,
@@ -150,10 +151,25 @@ def prepare_new_main_object(
     shutil.copy2(dumped_cfg, staging / "Configuration.xml")
 
     try:
+        # Ext MUST come from this IB dump — never from REPO_CF (5318 UI overwrite)
+        ext_copied = copy_configuration_ext(dump_dir, staging)
         inserted = patch_child_objects(staging / "Configuration.xml", kind=kind, object_name=name)
         copied = copy_object_tree(repo_cf, staging, canon_obj)
     except Exception as exc:  # noqa: BLE001
-        return json_result({"ok": False, "error": str(exc), "stagingDir": str(staging)})
+        return json_result(
+            {
+                "ok": False,
+                "step": "fix_configuration_root_source",
+                "error": str(exc),
+                "dumpDir": str(dump_dir),
+                "stagingDir": str(staging),
+                "message": (
+                    "Staging failed. If Ext/ is missing from the IB dump, "
+                    "open WORK from the 1C list (storage connected) and retry prepare — "
+                    "do not copy Ext from git."
+                ),
+            }
+        )
 
     sanity = sanity_check_configuration(
         staging / "Configuration.xml",
@@ -190,6 +206,7 @@ def prepare_new_main_object(
             "objectsToCapture": objects_to_capture,
             "childObjectInserted": inserted,
             "copiedPaths": copied,
+            "extCopiedFromIbDump": ext_copied,
             "sanity": sanity,
             "session": session_meta,
             "message": (

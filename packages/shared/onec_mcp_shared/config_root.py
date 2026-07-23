@@ -10,6 +10,14 @@ from typing import Any
 
 MARKER_NAME = ".onec_mcp_root_prepared.json"
 
+# Ext files that must come from the same-IB dump (never from git REPO_CF)
+_REQUIRED_EXT_REL = (
+    "Ext/HomePageWorkArea.xml",
+    "Ext/ClientApplicationInterface.xml",
+    "Ext/CommandInterface.xml",
+    "Ext/MainSectionCommandInterface.xml",
+)
+
 _UUID_RE = re.compile(
     r'<MetaDataObject[^>]*>.*?<Configuration\s+uuid="([0-9a-fA-F-]{36})"',
     re.DOTALL | re.IGNORECASE,
@@ -182,6 +190,18 @@ def gate_configuration_root_load(
                 "message": "Prepared staging failed sanity check: " + "; ".join(sanity["errors"]),
                 "sanity": sanity,
             }
+        missing_ext = configuration_ext_missing(src)
+        if missing_ext:
+            return {
+                "ok": False,
+                "step": "fix_configuration_root_source",
+                "message": (
+                    "Prepared staging missing Configuration Ext from IB dump: "
+                    + ", ".join(missing_ext)
+                    + ". Re-run prepare_new_main_object (Ext must come from IB, not git)."
+                ),
+                "missingExt": missing_ext,
+            }
         return {"ok": True, "step": "configuration_root_prepared", "sanity": sanity, "marker": marker}
 
     return {
@@ -220,6 +240,46 @@ def patch_child_objects(configuration_xml: Path, *, kind: str, object_name: str)
     text = text[:close] + insert + text[close:]
     configuration_xml.write_text(text, encoding="utf-8")
     return True
+
+
+def configuration_ext_missing(dump_or_staging: Path) -> list[str]:
+    """Return required Ext relative paths missing under dump/staging root."""
+    root = Path(dump_or_staging)
+    missing: list[str] = []
+    for rel in _REQUIRED_EXT_REL:
+        if not (root / Path(rel)).is_file():
+            missing.append(rel)
+    return missing
+
+
+def copy_configuration_ext(source_dump: Path, staging: Path) -> list[str]:
+    """
+    Copy Configuration Ext/ from an IB dump into staging.
+    Never use REPO_CF Ext here — that overwrites live home-page / UI (5318).
+    """
+    src_ext = Path(source_dump) / "Ext"
+    if not src_ext.is_dir():
+        raise FileNotFoundError(
+            f"Ext/ missing in IB Configuration dump: {source_dump}. "
+            "Partial dump without Ext — reconnect storage / re-dump Configuration "
+            "before prepare_new_main_object (do not copy Ext from git)."
+        )
+    missing = configuration_ext_missing(source_dump)
+    if missing:
+        raise FileNotFoundError(
+            "IB Configuration dump incomplete, missing: "
+            + ", ".join(missing)
+            + ". Re-dump Configuration from the same IB with storage connected."
+        )
+    dst_ext = Path(staging) / "Ext"
+    if dst_ext.exists():
+        shutil.rmtree(dst_ext)
+    shutil.copytree(src_ext, dst_ext)
+    copied: list[str] = []
+    for p in dst_ext.rglob("*"):
+        if p.is_file():
+            copied.append(str(p.relative_to(staging)).replace("\\", "/"))
+    return copied
 
 
 def copy_object_tree(repo_cf: Path, staging: Path, meta_name: str) -> list[str]:
