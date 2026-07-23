@@ -21,6 +21,7 @@ from onec_mcp_shared.session import with_managed_session  # noqa: E402
 from onec_mcp_shared.adopt_check import check_adopted_uuids  # noqa: E402
 from onec_mcp_shared.config_root import (  # noqa: E402
     child_objects_count,
+    configuration_ext_missing,
     copy_configuration_ext,
     copy_object_tree,
     gate_configuration_root_load,
@@ -62,11 +63,18 @@ def _health_payload(verbose: bool = False) -> dict:
         "repoCfe": env("REPO_CFE"),
         "ok": Path(env("ONEC_BIN", "") or ".").is_file() and Path(dev or ".").is_dir(),
         "storagePathSet": bool((env("ONEC_STORAGE_PATH") or "").strip()),
-        "tools": ["load_prepare_work", "prepare_new_main_object", "load_objects", "load_health"],
-        "mcpLoadRev": env("MCP_LOAD_REV") or "4",
+        "tools": [
+            "load_prepare_work",
+            "prepare_new_main_object",
+            "restore_configuration_ext",
+            "load_objects",
+            "load_health",
+        ],
+        "mcpLoadRev": env("MCP_LOAD_REV") or "5",
         "note": (
             "Default target=dev. WORK needs confirm=true and storage_captured=true. "
-            "Never load Configuration.xml from git — use prepare_new_main_object."
+            "Never load Configuration.xml from git or without Ext/ — "
+            "use prepare_new_main_object / restore_configuration_ext."
         ),
     }
     if verbose:
@@ -220,6 +228,169 @@ def prepare_new_main_object(
                 "name": "load_objects",
                 "args": {
                     "objects": objects_to_capture,
+                    "source_dir": str(staging),
+                    "target": target,
+                    "confirm": True,
+                    "storage_captured": True,
+                    "manage_session": True,
+                    "force_close": True,
+                },
+            },
+            "stop": True,
+        }
+    )
+
+
+@mcp.tool(name="restore_configuration_ext")
+def restore_configuration_ext(
+    target: str = "work",
+    ext_donor: str = "dev",
+    manage_session: bool = True,
+    force_close: bool = True,
+) -> str:
+    """
+    Restore Configuration Ext/ onto target IB after a wipe (5318):
+    dump Configuration.xml from target, copy Ext from donor IB dump, staging+marker.
+    Does not change ChildObjects. Then capture Configuration and load_objects.
+    """
+    try:
+        ib = resolve_ib(target)
+        resolve_ib(ext_donor)
+    except ValueError as exc:
+        return json_result({"ok": False, "error": str(exc)})
+
+    stamp = now_stamp()
+    dump_tmp = Path(env("DUMP_TMP_ROOT", str(Path.cwd() / ".tmp" / "1c-dump")))
+    target_dump = dump_tmp / f"root_restore_{stamp}"
+    donor_dump = dump_tmp / f"ext_donor_{stamp}"
+    staging = Path(env("DUMP_TMP_ROOT", str(Path.cwd() / ".tmp" / "1c-load"))) / f"staging_ext_{stamp}"
+    target_dump.mkdir(parents=True, exist_ok=True)
+    donor_dump.mkdir(parents=True, exist_ok=True)
+    staging.mkdir(parents=True, exist_ok=True)
+
+    def _dump_cfg(dump_dir: Path, tgt: str):
+        list_file = dump_dir / "objects.txt"
+        write_list_file(["Configuration"], list_file, for_load=False)
+        args = [
+            "/DumpConfigToFiles",
+            str(dump_dir),
+            "-listFile",
+            str(list_file),
+            "-Format",
+            "Hierarchical",
+        ]
+        return run_designer(args, work_dir=dump_dir, objects=["Configuration"], target=tgt)
+
+    session_meta = None
+    try:
+        if manage_session:
+            result_t, session_meta = with_managed_session(
+                ib,
+                lambda: _dump_cfg(target_dump, target),
+                force_close=force_close,
+                reopen=_is_work_target(target),
+                restart_even_on_fail=True,
+            )
+        else:
+            result_t = _dump_cfg(target_dump, target)
+    except Exception as exc:  # noqa: BLE001
+        return json_result({"ok": False, "error": f"target dump: {exc}", "session": session_meta})
+
+    if result_t.exit_code != 0 and not (target_dump / "Configuration.xml").is_file():
+        payload = result_t.to_dict()
+        payload["ok"] = False
+        payload["message"] = "Failed to dump Configuration.xml from target IB."
+        return json_result(payload)
+
+    dumped_cfg = target_dump / "Configuration.xml"
+    if not dumped_cfg.is_file():
+        return json_result({"ok": False, "error": f"Configuration.xml missing in {target_dump}"})
+
+    try:
+        if manage_session and _is_work_target(ext_donor):
+            result_d, _ = with_managed_session(
+                resolve_ib(ext_donor),
+                lambda: _dump_cfg(donor_dump, ext_donor),
+                force_close=force_close,
+                reopen=False,
+                restart_even_on_fail=True,
+            )
+        else:
+            result_d = _dump_cfg(donor_dump, ext_donor)
+    except Exception as exc:  # noqa: BLE001
+        return json_result({"ok": False, "error": f"donor dump: {exc}", "session": session_meta})
+
+    if configuration_ext_missing(donor_dump):
+        # WORK often omits Ext when storage disconnected; donor must have Ext
+        return json_result(
+            {
+                "ok": False,
+                "step": "fix_configuration_ext_incomplete",
+                "message": (
+                    f"Donor IB ({ext_donor}) dump has no Ext/. "
+                    "Pick a donor that dumps Ext (usually dev), or reconnect storage."
+                ),
+                "donorDump": str(donor_dump),
+                "missingExt": configuration_ext_missing(donor_dump),
+            }
+        )
+
+    baseline_copy = staging / "_baseline_Configuration.xml"
+    shutil.copy2(dumped_cfg, baseline_copy)
+    shutil.copy2(dumped_cfg, staging / "Configuration.xml")
+    try:
+        ext_copied = copy_configuration_ext(donor_dump, staging)
+    except Exception as exc:  # noqa: BLE001
+        return json_result({"ok": False, "error": str(exc), "stagingDir": str(staging)})
+
+    baseline_count = child_objects_count(baseline_copy)
+    sanity = sanity_check_configuration(
+        staging / "Configuration.xml",
+        baseline=baseline_copy,
+        allow_extra_child=0,
+    )
+    if not sanity["ok"]:
+        return json_result(
+            {
+                "ok": False,
+                "step": "fix_configuration_root_source",
+                "message": "Staging sanity failed: " + "; ".join(sanity["errors"]),
+                "sanity": sanity,
+                "stagingDir": str(staging),
+            }
+        )
+
+    write_prepared_marker(
+        staging,
+        target=target,
+        ib=ib,
+        new_object="(ext-restore)",
+        baseline_xml=baseline_copy,
+        baseline_child_count=baseline_count,
+        allow_extra_child=0,
+    )
+
+    return json_result(
+        {
+            "ok": True,
+            "step": "capture_then_approve",
+            "target": target,
+            "extDonor": ext_donor,
+            "stagingDir": str(staging),
+            "objectsToCapture": ["Configuration"],
+            "extCopiedFromDonorDump": ext_copied,
+            "sanity": sanity,
+            "session": session_meta,
+            "message": (
+                "Staging: target Configuration.xml + Ext from donor IB dump.\n"
+                "Capture in storage:\n- Configuration\n\n"
+                "Then: load_objects(objects=['Configuration'], source_dir=stagingDir, "
+                "confirm=true, storage_captured=true, target=...)."
+            ),
+            "nextTool": {
+                "name": "load_objects",
+                "args": {
+                    "objects": ["Configuration"],
                     "source_dir": str(staging),
                     "target": target,
                     "confirm": True,

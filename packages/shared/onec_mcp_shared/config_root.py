@@ -174,6 +174,23 @@ def gate_configuration_root_load(
             ),
         }
 
+    # 5318: LoadConfigFromFiles of Configuration.xml WITHOUT Ext/ wipes UI on the IB
+    if src and src.is_dir() and (src / "Configuration.xml").is_file():
+        missing_ext = configuration_ext_missing(src)
+        if missing_ext:
+            return {
+                "ok": False,
+                "step": "fix_configuration_ext_incomplete",
+                "message": (
+                    "Refusing Configuration load without Ext/ (would wipe HomePage/CI UI — incident 5318). "
+                    "Missing: "
+                    + ", ".join(missing_ext)
+                    + ". Use prepare_new_main_object or restore_configuration_ext "
+                    "(Ext must come from an IB dump, not omitted)."
+                ),
+                "missingExt": missing_ext,
+            }
+
     if is_prepared_staging(src):
         marker = json.loads(prepared_marker_path(src).read_text(encoding="utf-8"))
         cfg = src / "Configuration.xml"
@@ -190,18 +207,7 @@ def gate_configuration_root_load(
                 "message": "Prepared staging failed sanity check: " + "; ".join(sanity["errors"]),
                 "sanity": sanity,
             }
-        missing_ext = configuration_ext_missing(src)
-        if missing_ext:
-            return {
-                "ok": False,
-                "step": "fix_configuration_root_source",
-                "message": (
-                    "Prepared staging missing Configuration Ext from IB dump: "
-                    + ", ".join(missing_ext)
-                    + ". Re-run prepare_new_main_object (Ext must come from IB, not git)."
-                ),
-                "missingExt": missing_ext,
-            }
+        # Ext already verified above
         return {"ok": True, "step": "configuration_root_prepared", "sanity": sanity, "marker": marker}
 
     return {
@@ -209,8 +215,8 @@ def gate_configuration_root_load(
         "step": "fix_configuration_root_source",
         "message": (
             "Refusing Configuration root load without prepared staging. "
-            "Call prepare_new_main_object(new_object=..., target=...) first, "
-            "then load_objects from returned stagingDir with configuration_root_prepared implied by marker."
+            "Call prepare_new_main_object(new_object=..., target=...) or "
+            "restore_configuration_ext(target=..., ext_donor=...) first."
         ),
     }
 
@@ -319,16 +325,18 @@ def write_prepared_marker(
     new_object: str,
     baseline_xml: Path,
     baseline_child_count: int,
+    allow_extra_child: int = 1,
+    kind: str = "configuration_root_prepared",
 ) -> Path:
     marker = {
         "ok": True,
-        "kind": "configuration_root_prepared",
+        "kind": kind,
         "target": target,
         "ib": ib,
         "newObject": new_object,
         "baselineConfigurationXml": str(baseline_xml),
         "baselineChildCount": baseline_child_count,
-        "allowExtraChild": 1,
+        "allowExtraChild": allow_extra_child,
     }
     path = prepared_marker_path(staging)
     path.write_text(json.dumps(marker, ensure_ascii=False, indent=2), encoding="utf-8")

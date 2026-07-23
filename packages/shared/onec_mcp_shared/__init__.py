@@ -335,6 +335,9 @@ TYPE_TO_FOLDER = {
 def object_to_list_entry(name: str, *, for_load: bool = False) -> str:
     """Metadata name for dump listFile; hierarchical relative path for load listFile."""
     canon = normalize_object_name(name)
+    low = canon.lower().replace("\\", "/")
+    if for_load and low in ("configuration", "конфигурация", "configuration.xml"):
+        return "Configuration.xml"
     if not for_load or "." not in canon:
         return canon
     kind, obj = canon.split(".", 1)

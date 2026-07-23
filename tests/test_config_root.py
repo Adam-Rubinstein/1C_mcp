@@ -116,25 +116,15 @@ def test_prepared_staging_ok(tmp_path: Path):
     assert g["ok"] is True
 
 
-def test_gate_refuses_prepared_without_ext(tmp_path: Path):
-    uid = "33333333-3333-3333-3333-333333333333"
-    staging = tmp_path / "staging"
+def test_gate_refuses_configuration_without_ext(tmp_path: Path):
+    """5318: bare Configuration.xml (no Ext) must be refused."""
+    staging = tmp_path / "bare"
     staging.mkdir()
+    uid = "44444444-4444-4444-4444-444444444444"
     kids = [("DataProcessor", f"P{i}") for i in range(60)]
     kids.append(("DataProcessor", "ЭСТ_РабочийСтолСклад"))
     kids.append(("Document", "Эст_Выпуск"))
-    baseline = staging / "_baseline_Configuration.xml"
-    cfg = staging / "Configuration.xml"
-    _write_cfg(baseline, uuid=uid, children=kids)
-    _write_cfg(cfg, uuid=uid, children=kids)
-    cr.write_prepared_marker(
-        staging,
-        target="work",
-        ib="C:/ib",
-        new_object="DataProcessor.X",
-        baseline_xml=baseline,
-        baseline_child_count=len(kids),
-    )
+    _write_cfg(staging / "Configuration.xml", uuid=uid, children=kids)
     g = cr.gate_configuration_root_load(
         ["Configuration"],
         source_dir=staging,
@@ -142,7 +132,7 @@ def test_gate_refuses_prepared_without_ext(tmp_path: Path):
     )
     assert g is not None
     assert g["ok"] is False
-    assert "missingExt" in g or "Ext" in g.get("message", "")
+    assert g["step"] == "fix_configuration_ext_incomplete"
 
 
 def test_copy_configuration_ext(tmp_path: Path):
