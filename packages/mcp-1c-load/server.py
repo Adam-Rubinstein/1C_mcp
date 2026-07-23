@@ -19,6 +19,16 @@ from onec_mcp_shared import (  # noqa: E402
 from onec_mcp_shared.server_run import make_mcp, run_mcp  # noqa: E402
 from onec_mcp_shared.session import with_managed_session  # noqa: E402
 from onec_mcp_shared.adopt_check import check_adopted_uuids  # noqa: E402
+from onec_mcp_shared.config_root import (  # noqa: E402
+    child_objects_count,
+    copy_object_tree,
+    gate_configuration_root_load,
+    includes_configuration_root,
+    patch_child_objects,
+    sanity_check_configuration,
+    write_prepared_marker,
+)
+import shutil  # noqa: E402
 
 load_env_files(Path(__file__).with_name(".env"), Path.cwd() / ".env", Path(_ROOT).parent / ".env")
 
@@ -51,11 +61,11 @@ def _health_payload(verbose: bool = False) -> dict:
         "repoCfe": env("REPO_CFE"),
         "ok": Path(env("ONEC_BIN", "") or ".").is_file() and Path(dev or ".").is_dir(),
         "storagePathSet": bool((env("ONEC_STORAGE_PATH") or "").strip()),
-        "tools": ["load_prepare_work", "load_objects", "load_health"],
-        "mcpLoadRev": env("MCP_LOAD_REV") or "3",
+        "tools": ["load_prepare_work", "prepare_new_main_object", "load_objects", "load_health"],
+        "mcpLoadRev": env("MCP_LOAD_REV") or "4",
         "note": (
             "Default target=dev. WORK needs confirm=true and storage_captured=true. "
-            "Use load_prepare_work only if capture not confirmed; if user said do-it — load immediately."
+            "Never load Configuration.xml from git — use prepare_new_main_object."
         ),
     }
     if verbose:
@@ -70,6 +80,142 @@ def _health_payload(verbose: bool = False) -> dict:
     return payload
 
 
+@mcp.tool(name="prepare_new_main_object")
+def prepare_new_main_object(
+    new_object: str,
+    target: str = "work",
+    manage_session: bool = True,
+    force_close: bool = True,
+) -> str:
+    """
+    Safe path for NEW main-CF object: dump Configuration from the same IB,
+    patch ChildObjects, copy object+forms from REPO_CF into staging.
+    Then capture root+object and load_objects(source_dir=stagingDir).
+    """
+    canon_obj = normalize_object_name(new_object)
+    if "." not in canon_obj:
+        return json_result({"ok": False, "error": "new_object must be Kind.Name (e.g. DataProcessor.X)"})
+    kind, name = canon_obj.split(".", 1)
+    repo_cf = Path(env("REPO_CF") or "")
+    if not repo_cf.is_dir():
+        return json_result({"ok": False, "error": f"REPO_CF missing: {repo_cf}"})
+
+    try:
+        ib = resolve_ib(target)
+    except ValueError as exc:
+        return json_result({"ok": False, "error": str(exc)})
+
+    stamp = now_stamp()
+    dump_dir = Path(env("DUMP_TMP_ROOT", str(Path.cwd() / ".tmp" / "1c-dump"))) / f"root_{stamp}"
+    staging = Path(env("DUMP_TMP_ROOT", str(Path.cwd() / ".tmp" / "1c-load"))) / f"staging_{stamp}"
+    dump_dir.mkdir(parents=True, exist_ok=True)
+    staging.mkdir(parents=True, exist_ok=True)
+
+    list_file = dump_dir / "objects.txt"
+    write_list_file(["Configuration"], list_file, for_load=False)
+    args = ["/DumpConfigToFiles", str(dump_dir), "-listFile", str(list_file), "-Format", "Hierarchical"]
+
+    def _do_dump():
+        return run_designer(args, work_dir=dump_dir, objects=["Configuration"], target=target)
+
+    session_meta = None
+    try:
+        if manage_session:
+            result, session_meta = with_managed_session(
+                ib,
+                _do_dump,
+                force_close=force_close,
+                reopen=_is_work_target(target),
+                restart_even_on_fail=True,
+            )
+        else:
+            result = _do_dump()
+    except Exception as exc:  # noqa: BLE001
+        return json_result({"ok": False, "error": str(exc), "session": session_meta})
+
+    if result.exit_code != 0:
+        payload = result.to_dict()
+        payload["ok"] = False
+        payload["message"] = "Failed to dump Configuration from IB for staging."
+        return json_result(payload)
+
+    dumped_cfg = dump_dir / "Configuration.xml"
+    if not dumped_cfg.is_file():
+        return json_result({"ok": False, "error": f"Configuration.xml not in dump: {dump_dir}"})
+
+    baseline_count = child_objects_count(dumped_cfg)
+    # Keep immutable baseline copy for sanity
+    baseline_copy = staging / "_baseline_Configuration.xml"
+    shutil.copy2(dumped_cfg, baseline_copy)
+    shutil.copy2(dumped_cfg, staging / "Configuration.xml")
+
+    try:
+        inserted = patch_child_objects(staging / "Configuration.xml", kind=kind, object_name=name)
+        copied = copy_object_tree(repo_cf, staging, canon_obj)
+    except Exception as exc:  # noqa: BLE001
+        return json_result({"ok": False, "error": str(exc), "stagingDir": str(staging)})
+
+    sanity = sanity_check_configuration(
+        staging / "Configuration.xml",
+        baseline=baseline_copy,
+        allow_extra_child=1,
+    )
+    if not sanity["ok"]:
+        return json_result(
+            {
+                "ok": False,
+                "step": "fix_configuration_root_source",
+                "message": "Staging sanity failed: " + "; ".join(sanity["errors"]),
+                "sanity": sanity,
+                "stagingDir": str(staging),
+            }
+        )
+
+    write_prepared_marker(
+        staging,
+        target=target,
+        ib=ib,
+        new_object=canon_obj,
+        baseline_xml=baseline_copy,
+        baseline_child_count=baseline_count,
+    )
+
+    objects_to_capture = ["Configuration", canon_obj]
+    return json_result(
+        {
+            "ok": True,
+            "step": "capture_then_approve",
+            "target": target,
+            "stagingDir": str(staging),
+            "objectsToCapture": objects_to_capture,
+            "childObjectInserted": inserted,
+            "copiedPaths": copied,
+            "sanity": sanity,
+            "session": session_meta,
+            "message": (
+                "Staging ready from IB Configuration dump.\n"
+                "Capture in storage:\n"
+                + "\n".join(f"- {o}" for o in objects_to_capture)
+                + "\n\nThen: load_objects(objects=[...], source_dir=stagingDir, "
+                "confirm=true, storage_captured=true, target=...)."
+            ),
+            "nextTool": {
+                "name": "load_objects",
+                "args": {
+                    "objects": objects_to_capture,
+                    "source_dir": str(staging),
+                    "target": target,
+                    "confirm": True,
+                    "storage_captured": True,
+                    "manage_session": True,
+                    "force_close": True,
+                },
+            },
+            "stop": True,
+        }
+    )
+
+
 @mcp.tool(name="load_prepare_work")
 def load_prepare_work(
     objects: list[str],
@@ -82,6 +228,20 @@ def load_prepare_work(
     if not objects:
         return json_result({"ok": False, "error": "objects is required"})
     canon = _canon_objects(objects)
+    if includes_configuration_root(canon):
+        return json_result(
+            {
+                "ok": False,
+                "step": "fix_configuration_root_source",
+                "message": (
+                    "Configuration root in objects list. "
+                    "Do not load_prepare_work with git Configuration — "
+                    "call prepare_new_main_object(new_object=...) instead."
+                ),
+                "objectsToCapture": canon,
+                "stop": True,
+            }
+        )
     adopt = check_adopted_uuids(canon, repo_cf=env("REPO_CF"), repo_cfe=env("REPO_CFE"))
     if not adopt.get("ok", True) and not adopt.get("skipped"):
         return json_result(
@@ -190,6 +350,31 @@ def load_objects(
                 "adoptCheck": adopt,
                 "objects": canon,
                 "message": adopt.get("message"),
+                "stop": True,
+            }
+        )
+
+    # Default source before gate (gate compares to REPO_CF)
+    ext_name_preview = None
+    if extension is True:
+        ext_name_preview = env("ONEC_EXTENSION")
+    elif isinstance(extension, str) and extension:
+        ext_name_preview = extension
+    src_preview = Path(
+        source_dir or (env("REPO_CFE") if ext_name_preview else env("REPO_CF") or "")
+    )
+    root_gate = gate_configuration_root_load(
+        canon,
+        source_dir=src_preview,
+        repo_cf=env("REPO_CF"),
+    )
+    if root_gate is not None and not root_gate.get("ok", False):
+        return json_result(
+            {
+                "ok": False,
+                "error": "Configuration root load refused.",
+                **root_gate,
+                "objects": canon,
                 "stop": True,
             }
         )

@@ -78,6 +78,7 @@ Agents must show that list and stop — never pretend success.
 - Optional explicit storage CLI: set `ONEC_STORAGE_PATH` / `ONEC_STORAGE_USER` / `ONEC_STORAGE_PASSWORD`.
 - Never default-open Designer when no session was open on that IB; never reopen DEV for the user.
 - **Adopted UUID gate:** before prepare/load, `ExtendedConfigurationObject` in `REPO_CFE` must equal Attribute `uuid` in `REPO_CF` for the same attribute name. On mismatch → `ok=false`, step `fix_adopted_uuids`. New Adopted attrs require loading the **main** CF object, not only the extension.
+- **Configuration root gate:** loading `Configuration` / `Configuration.xml` from git is refused. Use `prepare_new_main_object` to dump the root from the **same** target IB, patch `ChildObjects`, stage with marker, then load. Incident 5318: stale root load broke WORK UI.
 
 ## Load
 

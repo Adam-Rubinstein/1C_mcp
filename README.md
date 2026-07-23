@@ -56,6 +56,7 @@ MCP (Model Context Protocol) — способ подключить к ИИ-ре�
 - **Не** поднимать DEV (InfoBase2) пользователю — это песочница агента.
 - Optional `ONEC_STORAGE_*` — explicit `/ConfigurationRepository*` on reopen.
 - **Adopted UUID gate:** before `load_prepare_work` / `load_objects`, MCP compares cfe `ExtendedConfigurationObject` to main CF Attribute `uuid`. Mismatch → refuse load (`fix_adopted_uuids`). Do not invent UUIDs; load **main** CF first for new Adopted attrs.
+- **Configuration root gate:** never load `Configuration.xml` from git/`REPO_CF`. Use `prepare_new_main_object` (dump root from the same IB → staging marker). Bare root load → `fix_configuration_root_source`.
 
 Если объекты в **хранилище** не захвачены, load вернёт `objectsToCapture` — не «тихий» успех.
 
