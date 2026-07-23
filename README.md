@@ -42,7 +42,9 @@ MCP (Model Context Protocol) — способ подключить к ИИ-ре�
 | **DEV** | `ONEC_IB_DEV` | Песочница (часто копия без хранилища). Сюда dump/load для проверки |
 | **WORK** | `ONEC_IB_WORK` | Рабочая база (часто с хранилищем). Load только когда вы готовы |
 
-По умолчанию dump и load идут в **dev**. В **work**: `load_objects(..., target="work", confirm=true)`.
+По умолчанию dump и load идут в **dev**. В **work**: если захват ещё не подтверждён — `load_prepare_work` → пользователь захватывает → затем `load_objects(..., target="work", confirm=true, storage_captured=true)`. Если пользователь уже сказал «я захватил» / «делай» — сразу load с `storage_captured=true` (без повторного стопа). Без `storage_captured=true` load в WORK **отклоняется**.
+
+**Состав объектов:** в `objects` только то, что относится к **текущей задаче**. Не тащить «связанные» справочники/расширения без явной просьбы пользователя (агентское правило в репозитории Estet: `1c-mcp-ib-targets`).
 
 ### Монополия Конфигуратора
 
@@ -50,7 +52,9 @@ MCP (Model Context Protocol) — способ подключить к ИИ-ре�
 
 - Правки только в файлах `src/cf` — монополия **не нужна**.
 - Load в **dev**, пока вы сидите в Конфигураторе на **work** — обычно **ок**.
-- Load в **ту же** базу, где открыт Конфигуратор — нужно закрыть его (или `manage_session=true`: сервер сам закроет 1С, зальёт, откроет снова с `/N` `/P`).
+- Load в **ту же** базу, где открыт Конфигуратор — `manage_session=true`: сервер **закроет только эту ИБ**, зальёт, и на **work** снова откроет Конфигуратор **как из списка баз** (`/IBName"ERP КОПИЯ"` + `ONEC_USER_WORK`) — так поднимается привязка хранилища. Не сырой `/F`.
+- **Не** поднимать DEV (InfoBase2) пользователю — это песочница агента.
+- Опционально `ONEC_STORAGE_*` — явный `/ConfigurationRepository*` при reopen.
 
 Если объекты в **хранилище** не захвачены, load вернёт `objectsToCapture` — не «тихий» успех.
 
@@ -75,7 +79,7 @@ python scripts\smoke_test.py --live-ib
 
 ### Важные переменные
 
-См. [`.env.example`](.env.example): `ONEC_BIN`, `ONEC_PLATFORM_PATH`, `ONEC_IB_DEV`, `ONEC_IB_WORK`, `ONEC_USER`, `ONEC_PASSWORD`, `ONEC_EXTENSION`, `REPO_CF`, `REPO_CFE`.
+См. [`.env.example`](.env.example): `ONEC_BIN`, `ONEC_PLATFORM_PATH`, `ONEC_IB_DEV`, `ONEC_IB_WORK`, `ONEC_USER`, `ONEC_PASSWORD`, `ONEC_EXTENSION`, `REPO_CF`, `REPO_CFE`, опционально `ONEC_STORAGE_PATH` / `ONEC_STORAGE_USER` / `ONEC_STORAGE_PASSWORD`.
 
 ## Примеры
 
@@ -87,9 +91,12 @@ python scripts\smoke_test.py --live-ib
 
 `load_objects(objects=["Document.МойДокумент"], confirm=true, target="dev")`
 
-**Загрузка в work с авто-перезапуском 1С:**
+**Загрузка в work (сначала захват в хранилище):**
 
-`load_objects(..., confirm=true, target="work", manage_session=true)`
+1. `load_prepare_work(objects=[...])` — чеклист, агент **ждёт** «я захватил» / «делай»
+2. `load_objects(..., confirm=true, storage_captured=true, target="work", manage_session=true, force_close=true)`
+
+(на work `reopen_designer` по умолчанию true — как из списка баз; опционально `ONEC_STORAGE_*`)
 
 **Справка платформы:**
 

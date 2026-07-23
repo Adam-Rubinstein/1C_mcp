@@ -47,6 +47,19 @@ def test_parse_storage_not_connected_is_not_lock():
     assert objs == []
 
 
+def test_resolve_ib_auth_per_target(monkeypatch: pytest.MonkeyPatch):
+    from onec_mcp_shared import resolve_ib_auth
+
+    monkeypatch.setenv("ONEC_USER", "Admin")
+    monkeypatch.setenv("ONEC_PASSWORD", "a")
+    monkeypatch.setenv("ONEC_USER_WORK", "WorkUser")
+    monkeypatch.setenv("ONEC_PASSWORD_WORK", "w")
+    monkeypatch.setenv("ONEC_USER_DEV", "DevUser")
+    monkeypatch.setenv("ONEC_PASSWORD_DEV", "d")
+    assert resolve_ib_auth("work") == ("WorkUser", "w")
+    assert resolve_ib_auth("dev") == ("DevUser", "d")
+
+
 def test_redact_password():
     cmd = ["1cv8", "DESIGNER", "/F", "C:\\ib", "/N", "Admin", "/P", "secret"]
     red = redact_cmd(cmd)
@@ -81,6 +94,77 @@ def test_cmdline_matches_ib_exact_name(monkeypatch: pytest.MonkeyPatch):
     assert not sess._cmdline_matches_ib(cmd_dev, mapping["ERP КОПИЯ"])
     assert sess._cmdline_matches_ib(cmd_work, mapping["ERP КОПИЯ"])
     assert not sess._cmdline_matches_ib(cmd_work, mapping["ERP КОПИЯ запасная"])
+
+
+def test_cmdline_does_not_cross_match_infobase_siblings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Bare InfoBase must not match InfoBase2/3 under the same parent."""
+    from onec_mcp_shared import session as sess
+
+    monkeypatch.setattr(sess, "_ibases_v8i_paths", lambda: {})
+    parent = tmp_path / "Documents"
+    ib = parent / "InfoBase"
+    ib2 = parent / "InfoBase2"
+    ib3 = parent / "InfoBase3"
+    for p in (ib, ib2, ib3):
+        p.mkdir(parents=True)
+    cmd2 = rf'DESIGNER /F "{ib2}"'
+    cmd3 = rf'DESIGNER /F "{ib3}"'
+    assert sess._cmdline_matches_ib(cmd2, ib2)
+    assert sess._cmdline_matches_ib(cmd3, ib3)
+    assert not sess._cmdline_matches_ib(cmd2, ib)
+    assert not sess._cmdline_matches_ib(cmd2, ib3)
+    assert not sess._cmdline_matches_ib(cmd3, ib2)
+
+
+def test_managed_session_reopen_false_does_not_start(monkeypatch: pytest.MonkeyPatch):
+    from onec_mcp_shared import session as sess
+
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        sess,
+        "find_ib_processes",
+        lambda _ib: [sess.IbProcess(pid=1, kind="designer", cmdline="x")],
+    )
+    monkeypatch.setattr(sess, "close_ib_sessions", lambda _ib, force=False: [{"pid": 1, "closed": True}])
+    monkeypatch.setattr(
+        sess,
+        "start_ib_session",
+        lambda *a, **k: calls.append("start") or {"pid": 2},
+    )
+    result, meta = sess.with_managed_session("C:/ib", lambda: "ok", reopen=False)
+    assert result == "ok"
+    assert calls == []
+    assert meta["started"] == []
+    assert "userAction" in meta
+
+
+def test_ib_name_for_path(monkeypatch: pytest.MonkeyPatch):
+    from onec_mcp_shared import session as sess
+
+    mapping = {
+        "ERP КОПИЯ": r"C:\Users\rubinshtein\Documents\InfoBase3",
+        "ERP КОПИЯ запасная": r"C:\Users\rubinshtein\Documents\InfoBase2",
+    }
+    monkeypatch.setattr(sess, "_ibases_v8i_paths", lambda: mapping)
+    assert sess.ib_name_for_path(mapping["ERP КОПИЯ"]) == "ERP КОПИЯ"
+    assert sess.ib_name_for_path(mapping["ERP КОПИЯ запасная"]) == "ERP КОПИЯ запасная"
+    assert sess.ib_name_for_path(r"C:\nope") is None
+
+
+def test_storage_cli_args(monkeypatch: pytest.MonkeyPatch):
+    from onec_mcp_shared import session as sess
+
+    monkeypatch.setenv("ONEC_STORAGE_PATH", r"\\server\repo")
+    monkeypatch.setenv("ONEC_STORAGE_USER", "dev")
+    monkeypatch.setenv("ONEC_STORAGE_PASSWORD", "secret")
+    args = sess.storage_cli_args()
+    assert args[0] == "/ConfigurationRepositoryF"
+    assert args[1] == r"\\server\repo"
+    assert "/ConfigurationRepositoryN" in args
+    assert "dev" in args
+    assert "/ConfigurationRepositoryP" in args
+    assert "secret" in args
 
 
 def test_designer_result_json_roundtrip():

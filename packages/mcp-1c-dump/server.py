@@ -19,6 +19,7 @@ from onec_mcp_shared import (  # noqa: E402
     write_list_file,
 )
 from onec_mcp_shared.server_run import make_mcp, run_mcp  # noqa: E402
+from onec_mcp_shared.session import with_managed_session  # noqa: E402
 
 load_env_files(Path(__file__).with_name(".env"), Path.cwd() / ".env", Path(_ROOT).parent / ".env")
 
@@ -44,7 +45,12 @@ def dump_status() -> str:
         "extension": env("ONEC_EXTENSION"),
         "repoCf": env("REPO_CF"),
         "repoCfe": env("REPO_CFE"),
-        "note": "dump always uses target=dev (ONEC_IB_DEV) unless target=work is passed",
+        "storagePathSet": bool((env("ONEC_STORAGE_PATH") or "").strip()),
+        "note": (
+            "Default target=dev only for sandbox smoke. "
+            "For 'from Configurator' use target=work. "
+            "manage_session on work reopens like 1C starter (/IBName + WORK user)."
+        ),
     }
     data["ok"] = bool(data["onecBinExists"] and data["ibDevExists"])
     return json_result(data)
@@ -58,10 +64,17 @@ def dump_objects(
     merge_into_repo: bool = True,
     force_full: bool = False,
     target: str = "dev",
+    manage_session: bool = False,
+    force_close: bool = False,
+    reopen_designer: bool | None = None,
 ) -> str:
     """
-    Partial dump via Designer -listFile (default from DEV / InfoBase2).
-    target: 'dev' (default) or 'work'. Prefer dev — no storage.
+    Partial dump via Designer -listFile.
+    target: 'dev' (sandbox) or 'work' (daily Configurator IB).
+    manage_session: close only the target IB, dump, then reopen on work like starter.
+    reopen_designer: None = auto (True on work, False on dev).
+    objects: ONLY metadata for the current task — do not add 'related' catalogs/extensions
+    unless the user explicitly asked for them.
     """
     if force_full and not objects:
         return json_result({"ok": False, "error": "Full dump into repo is disabled. Pass objects."})
@@ -72,6 +85,12 @@ def dump_objects(
         ib = resolve_ib(target)
     except ValueError as exc:
         return json_result({"ok": False, "error": str(exc)})
+
+    t = (target or "dev").strip().lower()
+    if reopen_designer is None:
+        reopen_designer = t in ("work", "prod", "base3")
+    if t in ("dev", "develop", "sandbox", "base2"):
+        reopen_designer = False
 
     dump_dir = Path(target_dir) if target_dir else _tmp_root() / now_stamp()
     dump_dir.mkdir(parents=True, exist_ok=True)
@@ -89,12 +108,34 @@ def dump_objects(
         args.extend(["-Extension", ext_name])
     args.extend(["-listFile", str(list_file), "-Format", "Hierarchical"])
 
-    result = run_designer(args, work_dir=dump_dir, objects=canon, target=target)
+    def _do_dump():
+        return run_designer(args, work_dir=dump_dir, objects=canon, target=target)
+
+    session_meta = None
+    try:
+        if manage_session:
+            result, session_meta = with_managed_session(
+                ib,
+                _do_dump,
+                force_close=force_close,
+                reopen=reopen_designer,
+            )
+        else:
+            result = _do_dump()
+    except Exception as exc:  # noqa: BLE001
+        return json_result({"ok": False, "error": str(exc), "session": session_meta})
+
     result.dump_dir = str(dump_dir)
     result.dumped_paths = list_dumped_paths(dump_dir)
     payload = result.to_dict()
     payload["ib"] = ib
     payload["target"] = target
+    if session_meta:
+        payload["session"] = session_meta
+        if session_meta.get("userAction"):
+            payload["userAction"] = session_meta["userAction"]
+        if session_meta.get("warning"):
+            payload["sessionWarning"] = session_meta["warning"]
     real_files = [
         p
         for p in result.dumped_paths

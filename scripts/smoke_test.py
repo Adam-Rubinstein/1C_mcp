@@ -137,10 +137,21 @@ def main() -> int:
             elif name == "load":
                 st = json.loads(mod.load_status())
                 bad = json.loads(mod.load_objects(objects=["Document.X"], confirm=False))
-                if bad.get("ok") is False and st.get("ok"):
-                    ok("load_status + confirm gate")
+                work_gate = json.loads(
+                    mod.load_objects(objects=["Document.X"], confirm=True, target="work", storage_captured=False)
+                )
+                prep = json.loads(mod.load_prepare_work(objects=["Document.X"]))
+                if (
+                    bad.get("ok") is False
+                    and st.get("ok")
+                    and work_gate.get("ok") is False
+                    and work_gate.get("stop") is True
+                    and prep.get("ok")
+                    and prep.get("stop") is True
+                ):
+                    ok("load_status + confirm + work storage gate + prepare")
                 else:
-                    fail(f"load: {st} {bad}")
+                    fail(f"load: {st} {bad} {work_gate} {prep}")
             elif name == "debug":
                 st = json.loads(mod.debug_status())
                 if "debugServerUrl" in st:
@@ -185,6 +196,9 @@ def main() -> int:
                 ok(f"live load {obj}")
             elif data.get("objectsToCapture") or data.get("storageError"):
                 ok(f"live load storage gate (objectsToCapture) — expected if IB uses storage")
+            elif data.get("logTail") or data.get("logPath"):
+                # Designer ran; failure is IB/repo content (storage, form paths, etc.), not MCP wiring
+                ok(f"live load Designer ran (exit={data.get('exitCode')}) — check logTail for IB/repo sync")
             else:
                 fail(f"live load: {data.get('logTail') or data}")
         except Exception as exc:

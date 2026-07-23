@@ -71,6 +71,13 @@ If Designer log contains capture/lock phrases, result has:
 
 Agents must show that list and stop — never pretend success.
 
+### Session management (`manage_session`)
+
+- Closes **only** the IB from `target` (strict `/F` path or exact `/IBName` from `ibases.v8i`).
+- `reopen_designer`: auto **True on work**, **False on dev**. Work reopen uses `/IBName"<title>"` + IB user (starter-like) so configuration repository restores from IB binding — not bare `/F`.
+- Optional explicit storage CLI: set `ONEC_STORAGE_PATH` / `ONEC_STORAGE_USER` / `ONEC_STORAGE_PASSWORD`.
+- Never default-open Designer when no session was open on that IB; never reopen DEV for the user.
+
 ## Load
 
 ```

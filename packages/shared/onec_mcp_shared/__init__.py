@@ -102,19 +102,17 @@ def normalize_object_name(name: str) -> str:
 def redact_cmd(argv: list[str]) -> list[str]:
     out: list[str] = []
     skip_next = False
+    secret_flags = {"/P", "-P", "/ConfigurationRepositoryP"}
     for i, arg in enumerate(argv):
         if skip_next:
             skip_next = False
             out.append("***")
             continue
-        if arg in ("/P", "-P") or arg.startswith("/P") and len(arg) > 2:
-            if arg in ("/P", "-P"):
-                out.append(arg)
-                skip_next = True
-            else:
-                out.append(arg[:2] + "***")
+        if arg in secret_flags:
+            out.append(arg)
+            skip_next = True
             continue
-        if arg.startswith("/P"):
+        if arg.startswith("/P") and len(arg) > 2:
             out.append("/P***")
             continue
         out.append(arg)
@@ -194,10 +192,39 @@ def resolve_ib(target: str = "dev") -> str:
     return path
 
 
+def resolve_ib_auth(target: str = "dev") -> tuple[str, str]:
+    """
+    Per-IB credentials.
+
+    WORK: ONEC_USER_WORK / ONEC_PASSWORD_WORK (fallback ONEC_USER / ONEC_PASSWORD)
+    DEV:  ONEC_USER_DEV / ONEC_PASSWORD_DEV (fallback ONEC_USER / ONEC_PASSWORD)
+    """
+    t = (target or "dev").strip().lower()
+    if t in ("work", "prod", "base3"):
+        user = env("ONEC_USER_WORK") or env("ONEC_USER", "") or ""
+        password = env("ONEC_PASSWORD_WORK")
+        if password is None:
+            password = env("ONEC_PASSWORD", "") or ""
+    else:
+        user = env("ONEC_USER_DEV") or env("ONEC_USER", "") or ""
+        password = env("ONEC_PASSWORD_DEV")
+        if password is None:
+            password = env("ONEC_PASSWORD", "") or ""
+    return user, password or ""
+
+
+def auth_for_ib_path(ib_path: str | Path) -> tuple[str, str]:
+    """Pick WORK vs DEV credentials by comparing resolved IB paths."""
+    needle = str(Path(ib_path).resolve()).lower().replace("/", "\\")
+    work = env("ONEC_IB_WORK") or ""
+    if work and str(Path(work).resolve()).lower().replace("/", "\\") == needle:
+        return resolve_ib_auth("work")
+    return resolve_ib_auth("dev")
+
+
 def build_ib_args(target: str = "dev") -> list[str]:
     """Build /F or /S auth args. File IB prefers ONEC_IB_DEV/WORK; server uses ONEC_SERVER+ONEC_REF."""
-    user = env("ONEC_USER", "")
-    password = env("ONEC_PASSWORD", "")
+    user, password = resolve_ib_auth(target)
     args: list[str] = []
     # Prefer explicit file targets
     try:
@@ -212,7 +239,7 @@ def build_ib_args(target: str = "dev") -> list[str]:
             raise
     if user:
         args.extend(["/N", user])
-    args.extend(["/P", password or ""])
+    args.extend(["/P", password])
     return args
 
 
