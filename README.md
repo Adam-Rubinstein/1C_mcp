@@ -23,7 +23,7 @@ MCP (Model Context Protocol) — способ подключить к ИИ-ре�
 |-------|--------|
 | **1c-platform** | Справка по API платформы: `search`, `info`, `getMember`, `getMembers`, `getConstructors` (чистый Python, читает HBK) |
 | **1c-dump** | Частичная / инкрементальная выгрузка конфигурации из ИБ в файлы |
-| **1c-load** | Частичная загрузка файлов в ИБ (`confirm=true` обязательно) |
+| **1c-load** | Частичная загрузка в ИБ: `load_prepare_work`, `load_objects` (`confirm=true`), `load_health` |
 | **1c-com** | Запросы и метаданные через COM (`V83.COMConnector`) |
 | **1c-files** | Поиск и чтение по каталогам выгрузки (`REPO_CF` / `REPO_CFE`) |
 | **1c-review** | Чеклист по BSL (паттерны из YAML) |
@@ -76,6 +76,8 @@ python scripts\smoke_test.py --live-ib
 `python scripts/run_server.py <platform|dump|load|…>`
 
 и переменные окружения из `.env`.
+
+Описания MCP tools держите **короткими**: длинный docstring у одного tool может привести к тому, что Cursor **отбросит другой** tool из каталога (UI «2» при Python «3»). Health-tool: `load_health`. После смены tools bump `MCP_LOAD_REV` в `mcp.json`. Подробнее: [docs/AGENT_SETUP.md](docs/AGENT_SETUP.md) § Cursor catalog.
 
 ### Важные переменные
 

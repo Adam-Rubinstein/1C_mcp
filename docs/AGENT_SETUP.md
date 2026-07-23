@@ -59,9 +59,21 @@ Paths under `.local/` must remain gitignored.
 - [ ] Platform `search("Запрос")` returns hits (JAR)
 - [ ] `files_status` sees dump roots
 - [ ] `dump_status` sees `ONEC_BIN` + IB (live dump only when IB available)
-- [ ] `load_objects` without `confirm` returns error
+- [ ] `load_health` ok; `load_objects` without `confirm` returns error
 - [ ] Storage error path returns `objectsToCapture` (when reproducible)
+- [ ] Cursor GetMcpTools for `1c-load` lists **`load_health`, `load_prepare_work`, `load_objects`** (UI «3 tools»; `mcp_auth` not counted)
 
+## Cursor catalog (tool count mismatch)
+
+UI **Tools & MCPs** «N tools enabled» can be **lower** than Python `list_tools` even when the missing tool is registered on disk.
+
+| Do | Don't |
+|----|-------|
+| Diff **tool names**: Python `list_tools` vs Cursor `GetMcpTools` | Blame «prepare not pushed» / remote host when stdio is local |
+| Keep MCP tool descriptions **short** (1–3 lines); put gate details in README/rules | Put ~900-char gate essays in `load_objects` docstring |
+| Bump `MCP_LOAD_REV` in project `mcp.json`, then Reload Window if needed | Kill all Python MCP processes as the first fix |
+
+Incident (2026-07-23): Cursor dropped `load_status` while keeping `load_prepare_work` + `load_objects` → UI showed **2**. Fix in toolkit: short descriptions + rename to `load_health`.
 ## Estet example (illustrative only)
 
 Do **not** commit:
