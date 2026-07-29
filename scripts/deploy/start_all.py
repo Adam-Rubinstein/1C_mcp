@@ -17,6 +17,7 @@ if not PY.is_file():
 SERVICES = [
     ("dump", 18761),
     ("load", 18762),
+    ("storage", 18769),
     ("com", 18763),
     ("files", 18764),
     ("review", 18765),

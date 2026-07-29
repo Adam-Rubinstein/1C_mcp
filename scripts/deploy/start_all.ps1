@@ -17,6 +17,7 @@ if (Test-Path $envFile) {
 $services = @(
     @{ Name = "dump"; Port = 18761 },
     @{ Name = "load"; Port = 18762 },
+    @{ Name = "storage"; Port = 18769 },
     @{ Name = "com"; Port = 18763 },
     @{ Name = "files"; Port = 18764 },
     @{ Name = "review"; Port = 18765 },

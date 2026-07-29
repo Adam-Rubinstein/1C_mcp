@@ -26,6 +26,7 @@ if (-not (Test-Path $envFile)) {
 $services = @(
     @{ Name = "dump"; Port = 8761 },
     @{ Name = "load"; Port = 8762 },
+    @{ Name = "storage"; Port = 8769 },
     @{ Name = "com"; Port = 8763 },
     @{ Name = "files"; Port = 8764 },
     @{ Name = "review"; Port = 8765 },
