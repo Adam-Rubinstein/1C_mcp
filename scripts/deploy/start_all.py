@@ -55,9 +55,13 @@ def main() -> int:
             env=env,
             stdout=out,
             stderr=err,
-            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
-            if sys.platform == "win32"
-            else 0,
+            creationflags=(
+            subprocess.CREATE_NEW_PROCESS_GROUP
+            | subprocess.DETACHED_PROCESS
+            | getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+        )
+        if sys.platform == "win32"
+        else 0,
         )
         pids.append(proc.pid)
         print(f"started {name} pid={proc.pid} port={port}")
