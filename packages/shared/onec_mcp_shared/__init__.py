@@ -64,6 +64,23 @@ STORAGE_HINTS = (
     "требуется захват",
 )
 
+STORAGE_GET_HINTS = (
+    "требуется получение",
+    "получение объектов",
+    "операция с хранилищем конфигурации отменена",
+)
+
+STORAGE_OFFLINE_HINTS = (
+    "хранилище не установлено",
+    "соединение с хранилищем конфигурации не установлено",
+    "соединение с хранилищем не установлено",
+)
+
+STORAGE_ACCESS_HINTS = (
+    "не удалось заблокировать таблицу",
+    "ошибка совместного доступа к хранилищу",
+)
+
 
 def load_env_files(*paths: str | Path) -> None:
     for p in paths:
@@ -128,7 +145,10 @@ class DesignerResult:
     dump_dir: str | None = None
     dumped_paths: list[str] = field(default_factory=list)
     objects_to_capture: list[str] = field(default_factory=list)
+    objects_to_get: list[str] = field(default_factory=list)
     storage_error: bool = False
+    storage_offline: bool = False
+    storage_access_error: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -139,16 +159,18 @@ class DesignerResult:
             "dumpDir": self.dump_dir,
             "dumpedPaths": self.dumped_paths,
             "objectsToCapture": self.objects_to_capture,
+            "objectsToGet": self.objects_to_get,
             "storageError": self.storage_error,
-            "ok": self.exit_code == 0 and not self.storage_error,
+            "storageOffline": self.storage_offline,
+            "storageAccessError": self.storage_access_error,
+            "ok": self.exit_code == 0
+            and not self.storage_error
+            and not self.storage_offline
+            and not self.storage_access_error,
         }
 
 
-def parse_storage_errors(log_text: str, objects: list[str]) -> tuple[bool, list[str]]:
-    low = log_text.lower()
-    if not any(h in low for h in STORAGE_HINTS):
-        return False, []
-    # Prefer explicit objects from request; also try to extract names from log lines
+def _match_objects_in_log(log_text: str, objects: list[str]) -> list[str]:
     found: list[str] = []
     for obj in objects:
         short = obj.split(".")[-1]
@@ -156,14 +178,52 @@ def parse_storage_errors(log_text: str, objects: list[str]) -> tuple[bool, list[
             found.append(obj)
     if not found:
         found = list(objects)
-    # unique preserve order
     seen: set[str] = set()
     uniq: list[str] = []
     for o in found:
         if o not in seen:
             seen.add(o)
             uniq.append(o)
-    return True, uniq
+    return uniq
+
+
+def is_storage_offline(log_text: str) -> bool:
+    low = log_text.lower()
+    return any(h in low for h in STORAGE_OFFLINE_HINTS)
+
+
+def is_storage_access_error(log_text: str) -> bool:
+    low = log_text.lower()
+    return any(h in low for h in STORAGE_ACCESS_HINTS)
+
+
+def parse_storage_get_required(log_text: str, objects: list[str]) -> tuple[bool, list[str]]:
+    low = log_text.lower()
+    if not any(h in low for h in STORAGE_GET_HINTS):
+        return False, []
+    return True, _match_objects_in_log(log_text, objects)
+
+
+def parse_storage_errors(log_text: str, objects: list[str]) -> tuple[bool, list[str]]:
+    """Lock/capture phrases only — offline is handled separately (ok on DEV dump)."""
+    low = log_text.lower()
+    if not any(h in low for h in STORAGE_HINTS):
+        return False, []
+    return True, _match_objects_in_log(log_text, objects)
+
+
+def is_work_target(target: str) -> bool:
+    return (target or "dev").strip().lower() in ("work", "prod", "base3")
+
+
+def require_storage_path() -> str:
+    path = (env("ONEC_STORAGE_PATH") or "").strip()
+    if not path:
+        raise ValueError(
+            "ONEC_STORAGE_PATH is required for configuration repository operations. "
+            "Set path like \\\\server\\share\\repo in .env / mcp.json."
+        )
+    return path
 
 
 def list_dumped_paths(dump_dir: Path) -> list[str]:
@@ -250,15 +310,36 @@ def run_designer(
     objects: list[str] | None = None,
     timeout_sec: int = 3600,
     target: str = "dev",
+    attach_storage: bool | None = None,
 ) -> DesignerResult:
+    """
+    Run Designer batch.
+
+    attach_storage:
+      None — attach /ConfigurationRepository* when ONEC_STORAGE_PATH set AND target=work
+      True — always require and attach storage
+      False — never attach
+    """
+    from onec_mcp_shared.session import storage_cli_args
+
     onec_bin = require_env("ONEC_BIN")
     work = work_dir or Path(tempfile.mkdtemp(prefix="1c-mcp-"))
     work.mkdir(parents=True, exist_ok=True)
     log_path = work / "designer.out"
+    storage_args: list[str] = []
+    do_attach = attach_storage
+    if do_attach is None:
+        do_attach = is_work_target(target) and bool((env("ONEC_STORAGE_PATH") or "").strip())
+    if do_attach:
+        require_storage_path()
+        storage_args = storage_cli_args()
+        if not storage_args:
+            raise ValueError("attach_storage requested but ONEC_STORAGE_PATH is empty")
     argv = [
         onec_bin,
         "DESIGNER",
         *build_ib_args(target=target),
+        *storage_args,
         "/DisableStartupDialogs",
         "/Out",
         str(log_path),
@@ -282,10 +363,15 @@ def run_designer(
     tail = "\n".join(log_text.splitlines()[-80:])
     objs = objects or []
     storage_error, to_capture = parse_storage_errors(log_text, objs)
-    # Non-zero exit or storage phrases => not ok
+    get_needed, to_get = parse_storage_get_required(log_text, objs)
+    offline = is_storage_offline(log_text)
+    access_err = is_storage_access_error(log_text)
+    if get_needed or access_err:
+        storage_error = True
+        if get_needed and not to_capture:
+            to_capture = []
     exit_code = proc.returncode
-    if storage_error and exit_code == 0:
-        # force attention
+    if (storage_error or offline or access_err or get_needed) and exit_code == 0:
         exit_code = 1
     return DesignerResult(
         exit_code=exit_code,
@@ -293,7 +379,10 @@ def run_designer(
         log_tail=tail,
         command=redact_cmd(argv),
         objects_to_capture=to_capture,
-        storage_error=storage_error,
+        objects_to_get=to_get,
+        storage_error=storage_error or get_needed or access_err,
+        storage_offline=offline,
+        storage_access_error=access_err,
     )
 
 

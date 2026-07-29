@@ -8,10 +8,12 @@ sys.path.insert(0, str(_ROOT / "shared"))
 
 from onec_mcp_shared import (  # noqa: E402
     env,
+    is_work_target,
     json_result,
     load_env_files,
     normalize_object_name,
     now_stamp,
+    require_storage_path,
     resolve_ib,
     run_designer,
     write_list_file,
@@ -38,7 +40,7 @@ mcp = make_mcp("1c-load")
 
 
 def _is_work_target(target: str) -> bool:
-    return (target or "dev").strip().lower() in ("work", "prod", "base3")
+    return is_work_target(target)
 
 
 def _is_dev_target(target: str) -> bool:
@@ -70,11 +72,11 @@ def _health_payload(verbose: bool = False) -> dict:
             "load_objects",
             "load_health",
         ],
-        "mcpLoadRev": env("MCP_LOAD_REV") or "5",
+        "mcpLoadRev": env("MCP_LOAD_REV") or "8-storage-attach-work",
         "note": (
-            "Default target=dev. WORK needs confirm=true and storage_captured=true. "
-            "Never load Configuration.xml from git or without Ext/ — "
-            "use prepare_new_main_object / restore_configuration_ext."
+            "Default target=dev. WORK needs confirm=true, storage_captured=true, "
+            "ONEC_STORAGE_PATH (attach). Prefer storage_get→dump→patch→storage_lock→load. "
+            "Never load Configuration.xml from git or without Ext/."
         ),
     }
     if verbose:
@@ -454,11 +456,13 @@ def load_prepare_work(
     elif isinstance(extension, str) and extension:
         ext_name = extension
     lines = [
-        "Перед загрузкой в WORK захватите в хранилище конфигурации:",
+        "Перед загрузкой в WORK:",
+        "1) При необходимости storage_get(objects) — выровнять с хранилищем.",
+        "2) Захватить (storage_lock или вручную в Конфигураторе):",
         "",
     ]
     for i, name in enumerate(canon, 1):
-        lines.append(f"{i}. {name}")
+        lines.append(f"   {i}. {name}")
     if ext_name:
         lines.append("")
         lines.append(f"Расширение: {ext_name}")
@@ -466,9 +470,9 @@ def load_prepare_work(
     lines.extend(
         [
             "",
-            "После захвата напишите: «я захватил» / «делай» / «можно грузить».",
-            "Если уже захватили — сразу «делай»: агент грузит без повторного стопа.",
-            "До подтверждения захвата агент НЕ вызывает load_objects на WORK.",
+            "Правильный порядок: dump-from-work → точечный патч → lock → load (с ONEC_STORAGE_*).",
+            "После захвата: «я захватил» / «делай». Поместить (storage_commit) — только по явной просьбе.",
+            "До подтверждения агент НЕ вызывает load_objects на WORK.",
         ]
     )
     return json_result(
@@ -577,15 +581,32 @@ def load_objects(
                 "objectsToCapture": canon,
                 "adoptCheck": adopt,
                 "message": (
-                    "Сначала захватите в хранилище:\n"
+                    "Сначала захватите в хранилище (storage_lock или UI):\n"
                     + "\n".join(f"- {o}" for o in canon)
                     + "\n\nКогда готово — напишите «я захватил» / «делай». "
-                    "Агент вызовет load_prepare_work / load_objects с storage_captured=true."
+                    "Агент вызовет load_objects с storage_captured=true."
                 ),
                 "stop": True,
                 "hint": "Call load_prepare_work(objects=...) and stop until user approval.",
             }
         )
+
+    if _is_work_target(t):
+        try:
+            require_storage_path()
+        except ValueError as exc:
+            return json_result(
+                {
+                    "ok": False,
+                    "error": str(exc),
+                    "step": "require_storage_for_work",
+                    "message": (
+                        "WORK load requires ONEC_STORAGE_PATH. Offline LoadConfigFromFiles "
+                        "desyncs local CF from storage (Get loop)."
+                    ),
+                    "stop": True,
+                }
+            )
 
     if reopen_designer is None:
         reopen_designer = _is_work_target(t)
@@ -614,8 +635,16 @@ def load_objects(
         args.extend(["-Extension", ext_name])
     args.extend(["-listFile", str(list_file), "-Format", "Hierarchical"])
 
+    attach = True if _is_work_target(t) else False
+
     def _do_load():
-        return run_designer(args, work_dir=work, objects=canon, target=target)
+        return run_designer(
+            args,
+            work_dir=work,
+            objects=canon,
+            target=target,
+            attach_storage=attach,
+        )
 
     session_meta = None
     try:
@@ -626,6 +655,7 @@ def load_objects(
                 force_close=force_close,
                 reopen=reopen_designer,
                 restart_even_on_fail=restart_even_on_fail,
+                attach_storage=attach or None,
             )
         else:
             result = _do_load()
@@ -637,7 +667,20 @@ def load_objects(
     payload["target"] = target
     if session_meta:
         payload["session"] = session_meta
-    if result.storage_error or result.objects_to_capture:
+    if result.objects_to_get:
+        payload["message"] = (
+            "Need get from storage: "
+            + ", ".join(result.objects_to_get)
+            + ". Use storage_get; do not Put blindly."
+        )
+        payload["objectsToGet"] = result.objects_to_get
+        payload["ok"] = False
+    elif result.storage_offline and _is_work_target(t):
+        payload["message"] = (
+            "WORK load reported storage offline — not success. Check ONEC_STORAGE_*."
+        )
+        payload["ok"] = False
+    elif result.storage_error or result.objects_to_capture:
         payload["message"] = (
             "Load failed due to configuration storage / object locks. "
             "Capture these objects, then retry: "
@@ -651,6 +694,11 @@ def load_objects(
     else:
         payload["ok"] = True
         payload["message"] = "Load finished. If metadata structure changed, update database configuration in Designer."
+        if _is_work_target(t):
+            payload["warning"] = (
+                "WORK load done with storage attached. "
+                "Do not storage_commit unless user explicitly asked; compare first."
+            )
     if session_meta and session_meta.get("userAction"):
         payload["userAction"] = session_meta["userAction"]
     if session_meta and session_meta.get("warning"):

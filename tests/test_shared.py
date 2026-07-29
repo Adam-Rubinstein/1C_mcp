@@ -55,6 +55,27 @@ def test_parse_storage_not_connected_is_not_lock():
     assert objs == []
 
 
+def test_parse_storage_get_required():
+    from onec_mcp_shared import parse_storage_get_required
+
+    log = (
+        "! Для выполнения операции требуется получение объектов:\n"
+        "| Документ.Эст_Выпуск\n"
+        "----- Операция с хранилищем конфигурации отменена -----"
+    )
+    need, objs = parse_storage_get_required(log, ["Document.Эст_Выпуск", "Document.Other"])
+    assert need is True
+    assert "Document.Эст_Выпуск" in objs
+
+
+def test_is_storage_offline_and_access():
+    from onec_mcp_shared import is_storage_access_error, is_storage_offline
+
+    assert is_storage_offline("Соединение с хранилищем конфигурации не установлено")
+    assert is_storage_access_error("Не удалось заблокировать таблицу 'OBJECTS'")
+    assert not is_storage_offline("Объект не захвачен")
+
+
 def test_resolve_ib_auth_per_target(monkeypatch: pytest.MonkeyPatch):
     from onec_mcp_shared import resolve_ib_auth
 

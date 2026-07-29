@@ -119,6 +119,7 @@ def main() -> int:
     for name, path in (
         ("dump", ROOT / "packages" / "mcp-1c-dump" / "server.py"),
         ("load", ROOT / "packages" / "mcp-1c-load" / "server.py"),
+        ("storage", ROOT / "packages" / "mcp-1c-storage" / "server.py"),
         ("debug", ROOT / "packages" / "mcp-1c-debug" / "server.py"),
         ("bsl", ROOT / "packages" / "mcp-1c-bsl" / "server.py"),
         ("com", ROOT / "packages" / "mcp-1c-com" / "server.py"),
@@ -134,6 +135,13 @@ def main() -> int:
                     ok("dump_status")
                 else:
                     fail(f"dump_status: {st}")
+            elif name == "storage":
+                st = json.loads(mod.storage_status())
+                bad = json.loads(mod.storage_commit(objects=["Document.X"], confirm=False, comment="x"))
+                if st.get("storagePathSet") is not None and bad.get("ok") is False:
+                    ok("storage_status+commit_gate")
+                else:
+                    fail(f"storage: {st} / {bad}")
             elif name == "load":
                 st = json.loads(mod.load_health())
                 bad = json.loads(mod.load_objects(objects=["Document.X"], confirm=False))

@@ -180,13 +180,19 @@ def storage_cli_args() -> list[str]:
     if not path:
         return []
     args = ["/ConfigurationRepositoryF", path]
-    user = (env("ONEC_STORAGE_USER") or "").strip()
+    user = (
+        (env("ONEC_STORAGE_USER") or "").strip()
+        or (env("ONEC_USER_WORK") or "").strip()
+        or (env("ONEC_USER") or "").strip()
+    )
     password = env("ONEC_STORAGE_PASSWORD")
     if password is None:
-        password = ""
+        password = env("ONEC_PASSWORD_WORK")
+    if password is None:
+        password = env("ONEC_PASSWORD", "") or ""
     if user:
         args.extend(["/ConfigurationRepositoryN", user])
-    args.extend(["/ConfigurationRepositoryP", password])
+    args.extend(["/ConfigurationRepositoryP", password or ""])
     return args
 
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run a package MCP server: python scripts/run_server.py dump|load|com|files|review|journal|debug|bsl|platform"""
+"""Run a package MCP server: python scripts/run_server.py dump|load|storage|com|files|review|journal|debug|bsl|platform"""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ PACKAGES = {
     "platform": ROOT / "packages" / "mcp-1c-platform" / "server.py",
     "dump": ROOT / "packages" / "mcp-1c-dump" / "server.py",
     "load": ROOT / "packages" / "mcp-1c-load" / "server.py",
+    "storage": ROOT / "packages" / "mcp-1c-storage" / "server.py",
     "com": ROOT / "packages" / "mcp-1c-com" / "server.py",
     "files": ROOT / "packages" / "mcp-1c-files" / "server.py",
     "review": ROOT / "packages" / "mcp-1c-review" / "server.py",

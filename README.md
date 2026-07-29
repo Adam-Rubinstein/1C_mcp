@@ -24,6 +24,7 @@ MCP (Model Context Protocol) — способ подключить к ИИ-ре�
 | **1c-platform** | Справка по API платформы: `search`, `info`, `getMember`, `getMembers`, `getConstructors` (чистый Python, читает HBK) |
 | **1c-dump** | Частичная / инкрементальная выгрузка конфигурации из ИБ в файлы |
 | **1c-load** | Частичная загрузка в ИБ: `load_prepare_work`, `prepare_new_main_object`, `restore_configuration_ext`, `load_objects` (`confirm=true`), `load_health` |
+| **1c-storage** | Хранилище конфигурации: `storage_get`, `storage_lock`, `storage_unlock`, `storage_commit` (`confirm`), `storage_report` |
 | **1c-com** | Запросы и метаданные через COM (`V83.COMConnector`) |
 | **1c-files** | Поиск и чтение по каталогам выгрузки (`REPO_CF` / `REPO_CFE`) |
 | **1c-review** | Чеклист по BSL (паттерны из YAML) |

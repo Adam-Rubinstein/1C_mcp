@@ -8,12 +8,14 @@ sys.path.insert(0, str(_ROOT / "shared"))
 
 from onec_mcp_shared import (  # noqa: E402
     env,
+    is_work_target,
     json_result,
     list_dumped_paths,
     load_env_files,
     merge_copy,
     normalize_object_name,
     now_stamp,
+    require_storage_path,
     resolve_ib,
     run_designer,
     write_list_file,
@@ -92,6 +94,23 @@ def dump_objects(
     if t in ("dev", "develop", "sandbox", "base2"):
         reopen_designer = False
 
+    if is_work_target(t):
+        try:
+            require_storage_path()
+        except ValueError as exc:
+            return json_result(
+                {
+                    "ok": False,
+                    "error": str(exc),
+                    "step": "require_storage_for_work",
+                    "message": (
+                        "WORK dump requires ONEC_STORAGE_PATH so Designer attaches the repository. "
+                        "Without it local files desync from storage (Get loop)."
+                    ),
+                    "stop": True,
+                }
+            )
+
     dump_dir = Path(target_dir) if target_dir else _tmp_root() / now_stamp()
     dump_dir.mkdir(parents=True, exist_ok=True)
     list_file = dump_dir / "objects.txt"
@@ -108,8 +127,16 @@ def dump_objects(
         args.extend(["-Extension", ext_name])
     args.extend(["-listFile", str(list_file), "-Format", "Hierarchical"])
 
+    attach = True if is_work_target(t) else False
+
     def _do_dump():
-        return run_designer(args, work_dir=dump_dir, objects=canon, target=target)
+        return run_designer(
+            args,
+            work_dir=dump_dir,
+            objects=canon,
+            target=target,
+            attach_storage=attach,
+        )
 
     session_meta = None
     try:
@@ -119,6 +146,7 @@ def dump_objects(
                 _do_dump,
                 force_close=force_close,
                 reopen=reopen_designer,
+                attach_storage=attach or None,
             )
         else:
             result = _do_dump()
@@ -141,11 +169,26 @@ def dump_objects(
         for p in result.dumped_paths
         if not p.endswith(("objects.txt", "designer.out", "ConfigDumpInfo.xml"))
     ]
-    # Designer may exit 1 with only "хранилище не установлено" while files are written
-    if real_files and not result.storage_error:
-        payload["ok"] = True
-        if result.exit_code != 0:
-            payload["warning"] = "Designer non-zero exit, but object files were written"
+    # DEV: offline storage message OK if files written. WORK: offline = fail.
+    if real_files and not result.storage_error and not result.storage_access_error:
+        if is_work_target(t) and (result.storage_offline or result.objects_to_get):
+            payload["ok"] = False
+            payload["message"] = (
+                "WORK dump with storage offline or get-required. "
+                "Fix ONEC_STORAGE_* / Get objects, then retry. "
+                "Do not treat this as a successful sync."
+            )
+            if result.objects_to_get:
+                payload["objectsToGet"] = result.objects_to_get
+        else:
+            payload["ok"] = True
+            if result.exit_code != 0 and not is_work_target(t):
+                payload["warning"] = "Designer non-zero exit, but object files were written"
+            if is_work_target(t):
+                payload["warning"] = (
+                    "WORK dump finished with storage attached. "
+                    "Before load back: patch only your diff; lock; do not Put blindly."
+                )
     if any(normalize_object_name(o).lower() in ("configuration", "конфигурация") for o in canon):
         from onec_mcp_shared.config_root import configuration_ext_missing
 
