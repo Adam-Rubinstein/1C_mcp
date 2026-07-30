@@ -212,6 +212,23 @@ def test_storage_cli_empty_password_not_ib_fallback(monkeypatch: pytest.MonkeyPa
     assert "123321" not in args
 
 
+def test_write_storage_objects_file(tmp_path: Path):
+    from onec_mcp_shared import write_storage_objects_file
+
+    p = tmp_path / "objects.xml"
+    write_storage_objects_file(
+        ["Document.Эст_КвитанцияФПП", "Configuration"],
+        p,
+        include_child_objects=True,
+    )
+    text = p.read_text(encoding="utf-8")
+    assert 'xmlns="http://v8.1c.ru/8.3/config/objects"' in text
+    assert 'fullName="Document.Эст_КвитанцияФПП"' in text
+    assert 'includeChildObjects="true"' in text
+    assert "<Configuration " in text
+    assert not text.startswith("\ufeff")
+
+
 def test_designer_result_json_roundtrip():
 
     from onec_mcp_shared import DesignerResult

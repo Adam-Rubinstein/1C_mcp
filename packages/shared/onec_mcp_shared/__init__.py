@@ -442,6 +442,41 @@ def write_list_file(objects: list[str], path: Path, *, for_load: bool = False) -
     return path
 
 
+def write_storage_objects_file(
+    objects: list[str],
+    path: Path,
+    *,
+    include_child_objects: bool = True,
+) -> Path:
+    """XML object list for /ConfigurationRepository* -Objects (not dump listFile).
+
+    Format: https://kb.1ci.com/ … Object list file — <Objects><Object fullName=…/>.
+    Plain-text Document.X is rejected («Document is empty» XML parse error).
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    child = "true" if include_child_objects else "false"
+    parts = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<Objects xmlns="http://v8.1c.ru/8.3/config/objects" version="1.0">',
+    ]
+    for raw in objects:
+        name = normalize_object_name(raw.strip())
+        if not name:
+            continue
+        low = name.lower().replace("\\", "/")
+        if low in ("configuration", "конфигурация", "configuration.xml"):
+            parts.append(f'\t<Configuration includeChildObjects="{child}"/>')
+        else:
+            # Escape XML attribute quotes in names (none expected in metadata names)
+            safe = name.replace("&", "&amp;").replace('"', "&quot;")
+            parts.append(
+                f'\t<Object fullName="{safe}" includeChildObjects="{child}"/>'
+            )
+    parts.append("</Objects>")
+    path.write_text("\n".join(parts) + "\n", encoding="utf-8")
+    return path
+
+
 def merge_copy(src_dir: Path, dest_dir: Path) -> dict[str, Any]:
     overwrite: list[str] = []
     created: list[str] = []

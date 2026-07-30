@@ -18,7 +18,7 @@ from onec_mcp_shared import (  # noqa: E402
     require_storage_path,
     resolve_ib,
     run_designer,
-    write_list_file,
+    write_storage_objects_file,
 )
 from onec_mcp_shared.server_run import make_mcp, run_mcp  # noqa: E402
 from onec_mcp_shared.session import with_managed_session  # noqa: E402
@@ -215,7 +215,7 @@ def storage_get(
         args.append("-force")
     if not entire_config:
         list_file = work / "objects.txt"
-        write_list_file(canon, list_file, for_load=False)
+        write_storage_objects_file(canon, list_file)
         args.extend(["-Objects", str(list_file)])
     ext_name = None
     if extension is True:
@@ -272,7 +272,7 @@ def storage_lock(
         args.append("-revised")
     if not entire_config:
         list_file = work / "objects.txt"
-        write_list_file(canon, list_file, for_load=False)
+        write_storage_objects_file(canon, list_file)
         args.extend(["-Objects", str(list_file)])
     ext_name = None
     if extension is True:
@@ -329,7 +329,7 @@ def storage_unlock(
         args.append("-force")
     if not entire_config:
         list_file = work / "objects.txt"
-        write_list_file(canon, list_file, for_load=False)
+        write_storage_objects_file(canon, list_file)
         args.extend(["-Objects", str(list_file)])
     ext_name = None
     if extension is True:
@@ -399,7 +399,7 @@ def storage_commit(
         args.append("-force")
     if not entire_config:
         list_file = work / "objects.txt"
-        write_list_file(canon, list_file, for_load=False)
+        write_storage_objects_file(canon, list_file)
         args.extend(["-Objects", str(list_file)])
     ext_name = None
     if extension is True:
