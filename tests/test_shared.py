@@ -196,6 +196,22 @@ def test_storage_cli_args(monkeypatch: pytest.MonkeyPatch):
     assert "secret" in args
 
 
+def test_storage_cli_empty_password_not_ib_fallback(monkeypatch: pytest.MonkeyPatch):
+    """Empty storage password must not become ONEC_PASSWORD_WORK."""
+    from onec_mcp_shared import session as sess
+
+    monkeypatch.setenv("ONEC_STORAGE_PATH", r"\\1cmini\ХранилищеЕрп5_23\\")
+    monkeypatch.setenv("ONEC_STORAGE_USER", "РубинштейнА")
+    monkeypatch.setenv("ONEC_STORAGE_PASSWORD", "")
+    monkeypatch.setenv("ONEC_PASSWORD_WORK", "123321")
+    args = sess.storage_cli_args()
+    assert "/ConfigurationRepositoryN" in args
+    assert "РубинштейнА" in args
+    p_idx = args.index("/ConfigurationRepositoryP")
+    assert args[p_idx + 1] == ""
+    assert "123321" not in args
+
+
 def test_designer_result_json_roundtrip():
 
     from onec_mcp_shared import DesignerResult

@@ -175,24 +175,30 @@ def close_ib_sessions(ib_path: str | Path, *, force: bool = False, timeout_sec: 
 
 
 def storage_cli_args() -> list[str]:
-    """Optional /ConfigurationRepository* args from env (never invent path)."""
-    path = (env("ONEC_STORAGE_PATH") or "").strip()
+    """Optional /ConfigurationRepository* args from env (never invent path).
+
+    Storage login is independent of IB login. Empty ONEC_STORAGE_PASSWORD is
+    valid — do not fall back to ONEC_PASSWORD_WORK (env() treats '' as unset).
+    """
+    import os
+
+    path = (os.environ.get("ONEC_STORAGE_PATH") or "").strip()
     if not path:
         return []
     args = ["/ConfigurationRepositoryF", path]
     user = (
-        (env("ONEC_STORAGE_USER") or "").strip()
+        (os.environ.get("ONEC_STORAGE_USER") or "").strip()
         or (env("ONEC_USER_WORK") or "").strip()
         or (env("ONEC_USER") or "").strip()
     )
-    password = env("ONEC_STORAGE_PASSWORD")
-    if password is None:
-        password = env("ONEC_PASSWORD_WORK")
-    if password is None:
-        password = env("ONEC_PASSWORD", "") or ""
+    # Key present (even "") = storage password; key absent = legacy fallback
+    if "ONEC_STORAGE_PASSWORD" in os.environ:
+        password = os.environ.get("ONEC_STORAGE_PASSWORD") or ""
+    else:
+        password = env("ONEC_PASSWORD_WORK") or env("ONEC_PASSWORD", "") or ""
     if user:
         args.extend(["/ConfigurationRepositoryN", user])
-    args.extend(["/ConfigurationRepositoryP", password or ""])
+    args.extend(["/ConfigurationRepositoryP", password])
     return args
 
 
@@ -213,8 +219,10 @@ def start_ib_session(
     Do NOT pass /AppAutoCheckMode — with explicit DESIGNER/ENTERPRISE it opens
     the "Запуск 1С:Предприятия" list instead of Configurator.
 
-    Optional ONEC_STORAGE_* adds /ConfigurationRepository* when attach_storage
-    is True or None and path is set.
+    Interactive /IBName reopen restores repository binding from the IB —
+    never pass /ConfigurationRepository* again (re-auth while already bound
+    → «Ошибка аутентификации в хранилище»). Explicit attach only for headless
+    /F batch (like_starter=False).
     """
     onec_bin = require_env("ONEC_BIN")
     user, password = auth_for_ib_path(ib_path)
@@ -237,12 +245,16 @@ def start_ib_session(
         argv.extend(["/N", user])
     argv.extend(["/P", password])
     storage_args: list[str] = []
-    storage_path_set = bool((env("ONEC_STORAGE_PATH") or "").strip())
-    do_attach = (
-        True
-        if attach_storage is True
-        else (False if attach_storage is False else storage_path_set)
-    )
+    # /IBName already reconnects storage from IB — do not re-auth via CLI
+    if like_starter and ib_name:
+        do_attach = False
+    else:
+        storage_path_set = bool((env("ONEC_STORAGE_PATH") or "").strip())
+        do_attach = (
+            True
+            if attach_storage is True
+            else (False if attach_storage is False else storage_path_set)
+        )
     if do_attach and mode == "designer":
         storage_args = storage_cli_args()
         argv.extend(storage_args)
@@ -272,8 +284,8 @@ def with_managed_session(
     Close sessions on ib, run fn, optionally reopen what was open.
 
     Reopen uses /IBName + WORK user (starter-like) so IB-bound configuration
-    repository comes back. Optional ONEC_STORAGE_* for explicit CLI attach.
-    Never invent a Designer session if none was open (do not pop DEV for the user).
+    repository comes back — **without** CLI /ConfigurationRepository* re-auth.
+    Explicit ONEC_STORAGE_* attach is only for headless /F batch inside fn.
     """
     meta: dict[str, Any] = {"ib": str(ib_path), "reopen": reopen}
     before = find_ib_processes(ib_path)
@@ -313,7 +325,13 @@ def with_managed_session(
             meta["note"] = "Reopened with /F + IB user (no IBName match)."
         if any(s.get("storageAttached") for s in started):
             meta["note"] = (
-                "Reopened with /IBName (or /F) + /ConfigurationRepository* from ONEC_STORAGE_*."
+                "Reopened with /F + /ConfigurationRepository* from ONEC_STORAGE_* "
+                "(no IBName match — explicit storage attach)."
+            )
+        elif used_ibname:
+            meta["note"] = (
+                "Reopened with /IBName + IB user; storage from IB binding "
+                "(no CLI /ConfigurationRepository* re-auth)."
             )
     else:
         meta["started"] = []
