@@ -325,6 +325,7 @@ def run_designer(
     timeout_sec: int = 3600,
     target: str = "dev",
     attach_storage: bool | None = None,
+    extension_storage: bool = False,
 ) -> DesignerResult:
     """
     Run Designer batch.
@@ -334,11 +335,11 @@ def run_designer(
       True — require storage for this run
       False — never attach
 
-    WORK + storage: prefer /IBName + IB user so repository comes from IB binding.
-    Do NOT pass /ConfigurationRepositoryF/N/P again (re-auth → auth error).
-    CLI /ConfigurationRepository* only for /F batch when IBName is unavailable.
+    Headless WORK batch uses /F + /ConfigurationRepositoryF/N (and /P only if
+    password non-empty). Interactive reopen uses /IBName without CLI re-auth
+    (see session.start_ib_session). extension_storage → ONEC_STORAGE_PATH_CFE.
     """
-    from onec_mcp_shared.session import ib_name_for_path, storage_cli_args
+    from onec_mcp_shared.session import storage_cli_args
 
     onec_bin = require_env("ONEC_BIN")
     work = work_dir or Path(tempfile.mkdtemp(prefix="1c-mcp-"))
@@ -348,22 +349,15 @@ def run_designer(
     do_attach = attach_storage
     if do_attach is None:
         do_attach = is_work_target(target) and bool((env("ONEC_STORAGE_PATH") or "").strip())
-    prefer_ib_name = False
     if do_attach:
         require_storage_path()
-        ib_path = resolve_ib(target)
-        # WORK with list title: use IB-bound storage (no second auth)
-        if is_work_target(target) and ib_name_for_path(ib_path):
-            prefer_ib_name = True
-            storage_args = []
-        else:
-            storage_args = storage_cli_args()
-            if not storage_args:
-                raise ValueError("attach_storage requested but ONEC_STORAGE_PATH is empty")
+        storage_args = storage_cli_args(extension=extension_storage)
+        if not storage_args:
+            raise ValueError("attach_storage requested but ONEC_STORAGE_PATH is empty")
     argv = [
         onec_bin,
         "DESIGNER",
-        *build_ib_args(target=target, prefer_ib_name=prefer_ib_name),
+        *build_ib_args(target=target, prefer_ib_name=False),
         *storage_args,
         "/DisableStartupDialogs",
         "/Out",

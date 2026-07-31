@@ -198,14 +198,19 @@ def storage_cli_args(*, extension: bool = False) -> list[str]:
         or (env("ONEC_USER_WORK") or "").strip()
         or (env("ONEC_USER") or "").strip()
     )
-    # Key present (even "") = storage password; key absent = legacy fallback
+    # Never fall back to IB password — storage auth is separate; empty is valid.
+    # PowerShell `$env:ONEC_STORAGE_PASSWORD=''` often unsets the key; treat missing
+    # as empty, not as ONEC_PASSWORD_WORK (that caused «Ошибка аутентификации»).
     if "ONEC_STORAGE_PASSWORD" in os.environ:
         password = os.environ.get("ONEC_STORAGE_PASSWORD") or ""
     else:
-        password = env("ONEC_PASSWORD_WORK") or env("ONEC_PASSWORD", "") or ""
+        password = ""
     if user:
         args.extend(["/ConfigurationRepositoryN", user])
-    args.extend(["/ConfigurationRepositoryP", password])
+    # Omit -P when empty: some Designer builds treat empty /ConfigurationRepositoryP
+    # as failed auth; interactive IB binding uses empty password without the flag.
+    if password:
+        args.extend(["/ConfigurationRepositoryP", password])
     return args
 
 

@@ -76,6 +76,7 @@ def _run_storage_op(
     force_close: bool,
     reopen_designer: bool | None,
     work: Path,
+    extension_storage: bool = False,
 ) -> str:
     try:
         require_storage_path()
@@ -96,6 +97,7 @@ def _run_storage_op(
             objects=objects,
             target=target,
             attach_storage=True,
+            extension_storage=extension_storage,
         )
 
     session_meta = None
@@ -106,7 +108,7 @@ def _run_storage_op(
                 _do,
                 force_close=force_close,
                 reopen=reopen_designer,
-                attach_storage=True,
+                attach_storage=False,
             )
         else:
             result = _do()
@@ -116,7 +118,7 @@ def _run_storage_op(
     payload = result.to_dict()
     payload["ib"] = ib
     payload["target"] = target
-    payload["storagePath"] = env("ONEC_STORAGE_PATH")
+    payload["storagePath"] = env("ONEC_STORAGE_PATH_CFE" if extension_storage else "ONEC_STORAGE_PATH")
     if session_meta:
         payload["session"] = session_meta
     if result.objects_to_get:
@@ -132,8 +134,8 @@ def _run_storage_op(
         payload["ok"] = False
     elif result.storage_offline:
         payload["message"] = (
-            "Storage not connected. WORK batch should use /IBName (IB binding) "
-            "without /ConfigurationRepository* re-auth; if IBName missing, check ONEC_STORAGE_*."
+            "Storage not connected. Check ONEC_STORAGE_* / UNC; "
+            "interactive reopen uses /IBName without CLI re-auth."
         )
         payload["ok"] = False
     elif result.storage_error or result.objects_to_capture:
@@ -179,6 +181,14 @@ def storage_status() -> str:
     )
 
 
+def _extension_name(extension: str | bool | None) -> str | None:
+    if extension is True:
+        return env("ONEC_EXTENSION")
+    if isinstance(extension, str) and extension:
+        return extension
+    return None
+
+
 @mcp.tool(name="storage_get")
 def storage_get(
     objects: list[str] | None = None,
@@ -220,11 +230,7 @@ def storage_get(
         list_file = work / "objects.txt"
         write_storage_objects_file(canon, list_file)
         args.extend(["-Objects", str(list_file)])
-    ext_name = None
-    if extension is True:
-        ext_name = env("ONEC_EXTENSION")
-    elif isinstance(extension, str) and extension:
-        ext_name = extension
+    ext_name = _extension_name(extension)
     if ext_name:
         args.extend(["-Extension", ext_name])
 
@@ -236,6 +242,7 @@ def storage_get(
         force_close=force_close,
         reopen_designer=reopen_designer,
         work=work,
+        extension_storage=bool(ext_name),
     )
 
 
@@ -277,11 +284,7 @@ def storage_lock(
         list_file = work / "objects.txt"
         write_storage_objects_file(canon, list_file)
         args.extend(["-Objects", str(list_file)])
-    ext_name = None
-    if extension is True:
-        ext_name = env("ONEC_EXTENSION")
-    elif isinstance(extension, str) and extension:
-        ext_name = extension
+    ext_name = _extension_name(extension)
     if ext_name:
         args.extend(["-Extension", ext_name])
 
@@ -293,6 +296,7 @@ def storage_lock(
         force_close=force_close,
         reopen_designer=reopen_designer,
         work=work,
+        extension_storage=bool(ext_name),
     )
 
 
@@ -334,11 +338,7 @@ def storage_unlock(
         list_file = work / "objects.txt"
         write_storage_objects_file(canon, list_file)
         args.extend(["-Objects", str(list_file)])
-    ext_name = None
-    if extension is True:
-        ext_name = env("ONEC_EXTENSION")
-    elif isinstance(extension, str) and extension:
-        ext_name = extension
+    ext_name = _extension_name(extension)
     if ext_name:
         args.extend(["-Extension", ext_name])
 
@@ -350,6 +350,7 @@ def storage_unlock(
         force_close=force_close,
         reopen_designer=reopen_designer,
         work=work,
+        extension_storage=bool(ext_name),
     )
 
 
@@ -404,11 +405,7 @@ def storage_commit(
         list_file = work / "objects.txt"
         write_storage_objects_file(canon, list_file)
         args.extend(["-Objects", str(list_file)])
-    ext_name = None
-    if extension is True:
-        ext_name = env("ONEC_EXTENSION")
-    elif isinstance(extension, str) and extension:
-        ext_name = extension
+    ext_name = _extension_name(extension)
     if ext_name:
         args.extend(["-Extension", ext_name])
 
@@ -420,6 +417,7 @@ def storage_commit(
         force_close=force_close,
         reopen_designer=reopen_designer,
         work=work,
+        extension_storage=bool(ext_name),
     )
 
 
