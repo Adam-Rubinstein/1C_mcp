@@ -282,14 +282,28 @@ def auth_for_ib_path(ib_path: str | Path) -> tuple[str, str]:
     return resolve_ib_auth("dev")
 
 
-def build_ib_args(target: str = "dev") -> list[str]:
-    """Build /F or /S auth args. File IB prefers ONEC_IB_DEV/WORK; server uses ONEC_SERVER+ONEC_REF."""
+def build_ib_args(target: str = "dev", *, prefer_ib_name: bool = False) -> list[str]:
+    """Build /F, /IBName or /S auth args. File IB prefers ONEC_IB_DEV/WORK; server uses ONEC_SERVER+ONEC_REF.
+
+    prefer_ib_name=True (WORK + storage): open via list title so configuration
+    repository binding on the IB is restored — do not pair with
+    /ConfigurationRepository* (second auth → «Ошибка аутентификации»).
+    """
     user, password = resolve_ib_auth(target)
     args: list[str] = []
     # Prefer explicit file targets
     try:
         ib = resolve_ib(target)
-        args.extend(["/F", ib])
+        if prefer_ib_name:
+            from onec_mcp_shared.session import ib_name_for_path
+
+            ib_name = ib_name_for_path(ib)
+            if ib_name:
+                args.extend(["/IBName", ib_name])
+            else:
+                args.extend(["/F", ib])
+        else:
+            args.extend(["/F", ib])
     except ValueError:
         server = env("ONEC_SERVER")
         ref = env("ONEC_REF")
@@ -316,11 +330,15 @@ def run_designer(
     Run Designer batch.
 
     attach_storage:
-      None — attach /ConfigurationRepository* when ONEC_STORAGE_PATH set AND target=work
-      True — always require and attach storage
+      None — attach when ONEC_STORAGE_PATH set AND target=work
+      True — require storage for this run
       False — never attach
+
+    WORK + storage: prefer /IBName + IB user so repository comes from IB binding.
+    Do NOT pass /ConfigurationRepositoryF/N/P again (re-auth → auth error).
+    CLI /ConfigurationRepository* only for /F batch when IBName is unavailable.
     """
-    from onec_mcp_shared.session import storage_cli_args
+    from onec_mcp_shared.session import ib_name_for_path, storage_cli_args
 
     onec_bin = require_env("ONEC_BIN")
     work = work_dir or Path(tempfile.mkdtemp(prefix="1c-mcp-"))
@@ -330,15 +348,22 @@ def run_designer(
     do_attach = attach_storage
     if do_attach is None:
         do_attach = is_work_target(target) and bool((env("ONEC_STORAGE_PATH") or "").strip())
+    prefer_ib_name = False
     if do_attach:
         require_storage_path()
-        storage_args = storage_cli_args()
-        if not storage_args:
-            raise ValueError("attach_storage requested but ONEC_STORAGE_PATH is empty")
+        ib_path = resolve_ib(target)
+        # WORK with list title: use IB-bound storage (no second auth)
+        if is_work_target(target) and ib_name_for_path(ib_path):
+            prefer_ib_name = True
+            storage_args = []
+        else:
+            storage_args = storage_cli_args()
+            if not storage_args:
+                raise ValueError("attach_storage requested but ONEC_STORAGE_PATH is empty")
     argv = [
         onec_bin,
         "DESIGNER",
-        *build_ib_args(target=target),
+        *build_ib_args(target=target, prefer_ib_name=prefer_ib_name),
         *storage_args,
         "/DisableStartupDialogs",
         "/Out",

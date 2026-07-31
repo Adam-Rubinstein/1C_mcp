@@ -174,15 +174,22 @@ def close_ib_sessions(ib_path: str | Path, *, force: bool = False, timeout_sec: 
     return report
 
 
-def storage_cli_args() -> list[str]:
+def storage_cli_args(*, extension: bool = False) -> list[str]:
     """Optional /ConfigurationRepository* args from env (never invent path).
 
     Storage login is independent of IB login. Empty ONEC_STORAGE_PASSWORD is
     valid — do not fall back to ONEC_PASSWORD_WORK (env() treats '' as unset).
+
+    Prefer IB-bound storage via /IBName in run_designer for WORK — only use this
+    for /F batch when list title is unavailable.
+    extension=True → ONEC_STORAGE_PATH_CFE (fallback ONEC_STORAGE_PATH).
     """
     import os
 
-    path = (os.environ.get("ONEC_STORAGE_PATH") or "").strip()
+    if extension:
+        path = (os.environ.get("ONEC_STORAGE_PATH_CFE") or os.environ.get("ONEC_STORAGE_PATH") or "").strip()
+    else:
+        path = (os.environ.get("ONEC_STORAGE_PATH") or "").strip()
     if not path:
         return []
     args = ["/ConfigurationRepositoryF", path]

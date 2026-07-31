@@ -131,7 +131,10 @@ def _run_storage_op(
         )
         payload["ok"] = False
     elif result.storage_offline:
-        payload["message"] = "Storage not connected despite ONEC_STORAGE_*. Check path/user."
+        payload["message"] = (
+            "Storage not connected. WORK batch should use /IBName (IB binding) "
+            "without /ConfigurationRepository* re-auth; if IBName missing, check ONEC_STORAGE_*."
+        )
         payload["ok"] = False
     elif result.storage_error or result.objects_to_capture:
         payload["message"] = (
