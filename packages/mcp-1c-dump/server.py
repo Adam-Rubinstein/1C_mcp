@@ -136,6 +136,7 @@ def dump_objects(
             objects=canon,
             target=target,
             attach_storage=attach,
+            extension_storage=bool(ext_name),
         )
 
     session_meta = None
