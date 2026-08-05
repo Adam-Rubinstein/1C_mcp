@@ -9,6 +9,7 @@ _ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_ROOT / "shared"))
 
 from onec_mcp_shared import env, json_result, load_env_files  # noqa: E402
+from onec_mcp_shared.work_gates import refuse_work_ib_path  # noqa: E402
 from onec_mcp_shared.server_run import make_mcp, run_mcp  # noqa: E402
 
 load_env_files(Path(__file__).with_name(".env"), Path.cwd() / ".env")
@@ -24,6 +25,9 @@ def _connect():
 
     connector = win32com.client.Dispatch("V83.COMConnector")
     ib = env("ONEC_IB_DEV") or env("ONEC_IB")
+    refuse = refuse_work_ib_path(ib)
+    if refuse:
+        raise RuntimeError(refuse["error"])
     server = env("ONEC_SERVER")
     ref = env("ONEC_REF")
     user = env("ONEC_USER", "") or ""

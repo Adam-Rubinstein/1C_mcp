@@ -8,6 +8,7 @@ _ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_ROOT / "shared"))
 
 from onec_mcp_shared import env, json_result, load_env_files  # noqa: E402
+from onec_mcp_shared.work_gates import is_forbidden_secret_path, path_is_under  # noqa: E402
 from onec_mcp_shared.server_run import make_mcp, run_mcp  # noqa: E402
 
 load_env_files(Path(__file__).with_name(".env"), Path.cwd() / ".env")
@@ -110,10 +111,14 @@ def files_read(path: str, max_bytes: int = 200_000) -> str:
     p = Path(path)
     if not p.is_file():
         return json_result({"ok": False, "error": f"Not found: {path}"})
+    if is_forbidden_secret_path(p):
+        return json_result({"ok": False, "error": f"Refusing to read secret path: {p.name}", "stop": True})
     roots = _roots()
+    if not roots:
+        return json_result({"ok": False, "error": "Set CONFIG_DUMP_DIR and/or REPO_CF / REPO_CFE", "stop": True})
     resolved = p.resolve()
-    if roots and not any(str(resolved).startswith(str(r.resolve())) for r in roots):
-        return json_result({"ok": False, "error": "Path is outside allowed CONFIG_DUMP_DIR / REPO_* roots"})
+    if not any(path_is_under(resolved, r) for r in roots):
+        return json_result({"ok": False, "error": "Path is outside allowed CONFIG_DUMP_DIR / REPO_* roots", "stop": True})
     data = p.read_bytes()[:max_bytes]
     try:
         text = data.decode("utf-8")

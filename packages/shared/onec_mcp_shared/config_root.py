@@ -192,6 +192,11 @@ def gate_configuration_root_load(
             }
 
     if is_prepared_staging(src):
+        from .work_gates import verify_prepared_marker
+
+        sig_err = verify_prepared_marker(src)
+        if sig_err is not None:
+            return sig_err
         marker = json.loads(prepared_marker_path(src).read_text(encoding="utf-8"))
         cfg = src / "Configuration.xml"
         baseline = Path(marker["baselineConfigurationXml"]) if marker.get("baselineConfigurationXml") else None
@@ -328,7 +333,9 @@ def write_prepared_marker(
     allow_extra_child: int = 1,
     kind: str = "configuration_root_prepared",
 ) -> Path:
-    marker = {
+    from .work_gates import hash_ext_files, sign_prepared_marker
+
+    marker: dict[str, Any] = {
         "ok": True,
         "kind": kind,
         "target": target,
@@ -337,7 +344,9 @@ def write_prepared_marker(
         "baselineConfigurationXml": str(baseline_xml),
         "baselineChildCount": baseline_child_count,
         "allowExtraChild": allow_extra_child,
+        "extHashes": hash_ext_files(staging),
     }
+    marker["signature"] = sign_prepared_marker(marker)
     path = prepared_marker_path(staging)
     path.write_text(json.dumps(marker, ensure_ascii=False, indent=2), encoding="utf-8")
     return path

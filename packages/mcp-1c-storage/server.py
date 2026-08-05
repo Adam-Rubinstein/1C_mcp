@@ -20,6 +20,11 @@ from onec_mcp_shared import (  # noqa: E402
     run_designer,
     write_storage_objects_file,
 )
+from onec_mcp_shared.work_gates import (  # noqa: E402
+    refuse_entire_without_env,
+    write_aligned_marker,
+    write_lock_receipt,
+)
 from onec_mcp_shared.server_run import make_mcp, run_mcp  # noqa: E402
 from onec_mcp_shared.session import with_managed_session  # noqa: E402
 
@@ -50,6 +55,9 @@ def _gate_objects(
     entire_config: bool,
     confirm_entire: bool,
 ) -> tuple[list[str] | None, str | None]:
+    env_err = refuse_entire_without_env(entire_config=entire_config)
+    if env_err:
+        return None, json_result(env_err)
     err = _refuse_entire(entire_config=entire_config, confirm_entire=confirm_entire)
     if err:
         return None, err
@@ -77,12 +85,12 @@ def _run_storage_op(
     reopen_designer: bool | None,
     work: Path,
     extension_storage: bool = False,
-) -> str:
+) -> dict:
     try:
         require_storage_path()
         ib = resolve_ib(target)
     except ValueError as exc:
-        return json_result({"ok": False, "error": str(exc), "stop": True})
+        return {"ok": False, "error": str(exc), "stop": True}
 
     t = (target or "work").strip().lower()
     if reopen_designer is None:
@@ -113,7 +121,7 @@ def _run_storage_op(
         else:
             result = _do()
     except Exception as exc:  # noqa: BLE001
-        return json_result({"ok": False, "error": str(exc), "session": session_meta})
+        return {"ok": False, "error": str(exc), "session": session_meta}
 
     payload = result.to_dict()
     payload["ib"] = ib
@@ -150,6 +158,17 @@ def _run_storage_op(
     else:
         payload["ok"] = True
         payload["message"] = "Storage operation finished."
+    return payload
+
+
+def _finish_storage(payload: dict, *, kind: str, objects: list[str], target: str, extension: str | None) -> str:
+    if payload.get("ok"):
+        if kind == "get":
+            path = write_aligned_marker(objects, target=target, extension=extension)
+            payload["alignedMarker"] = str(path)
+        elif kind == "lock":
+            path = write_lock_receipt(objects, target=target, extension=extension)
+            payload["lockReceipt"] = str(path)
     return json_result(payload)
 
 
@@ -196,6 +215,7 @@ def storage_get(
     revised: bool = False,
     confirm_revised: bool = False,
     force: bool = False,
+    confirm_force: bool = False,
     entire_config: bool = False,
     confirm_entire: bool = False,
     extension: str | bool | None = None,
@@ -209,6 +229,14 @@ def storage_get(
             {
                 "ok": False,
                 "error": "revised=true overwrites local changes on locked objects; set confirm_revised=true.",
+                "stop": True,
+            }
+        )
+    if force and not confirm_force:
+        return json_result(
+            {
+                "ok": False,
+                "error": "force=true on storage_get requires confirm_force=true.",
                 "stop": True,
             }
         )
@@ -234,7 +262,7 @@ def storage_get(
     if ext_name:
         args.extend(["-Extension", ext_name])
 
-    return _run_storage_op(
+    payload = _run_storage_op(
         args,
         objects=canon,
         target=target,
@@ -244,6 +272,7 @@ def storage_get(
         work=work,
         extension_storage=bool(ext_name),
     )
+    return _finish_storage(payload, kind="get", objects=canon, target=target, extension=ext_name)
 
 
 @mcp.tool(name="storage_lock")
@@ -288,7 +317,7 @@ def storage_lock(
     if ext_name:
         args.extend(["-Extension", ext_name])
 
-    return _run_storage_op(
+    payload = _run_storage_op(
         args,
         objects=canon,
         target=target,
@@ -298,6 +327,7 @@ def storage_lock(
         work=work,
         extension_storage=bool(ext_name),
     )
+    return _finish_storage(payload, kind="lock", objects=canon, target=target, extension=ext_name)
 
 
 @mcp.tool(name="storage_unlock")
@@ -342,15 +372,17 @@ def storage_unlock(
     if ext_name:
         args.extend(["-Extension", ext_name])
 
-    return _run_storage_op(
-        args,
-        objects=canon,
-        target=target,
-        manage_session=manage_session,
-        force_close=force_close,
-        reopen_designer=reopen_designer,
-        work=work,
-        extension_storage=bool(ext_name),
+    return json_result(
+        _run_storage_op(
+            args,
+            objects=canon,
+            target=target,
+            manage_session=manage_session,
+            force_close=force_close,
+            reopen_designer=reopen_designer,
+            work=work,
+            extension_storage=bool(ext_name),
+        )
     )
 
 
@@ -361,6 +393,7 @@ def storage_commit(
     confirm: bool = False,
     keep_locked: bool = False,
     force: bool = False,
+    confirm_force: bool = False,
     entire_config: bool = False,
     confirm_entire: bool = False,
     extension: str | bool | None = None,
@@ -387,6 +420,14 @@ def storage_commit(
                 "stop": True,
             }
         )
+    if force and not confirm_force:
+        return json_result(
+            {
+                "ok": False,
+                "error": "force=true on storage_commit requires confirm_force=true.",
+                "stop": True,
+            }
+        )
     canon, err = _gate_objects(
         objects, entire_config=entire_config, confirm_entire=confirm_entire
     )
@@ -409,15 +450,17 @@ def storage_commit(
     if ext_name:
         args.extend(["-Extension", ext_name])
 
-    return _run_storage_op(
-        args,
-        objects=canon,
-        target=target,
-        manage_session=manage_session,
-        force_close=force_close,
-        reopen_designer=reopen_designer,
-        work=work,
-        extension_storage=bool(ext_name),
+    return json_result(
+        _run_storage_op(
+            args,
+            objects=canon,
+            target=target,
+            manage_session=manage_session,
+            force_close=force_close,
+            reopen_designer=reopen_designer,
+            work=work,
+            extension_storage=bool(ext_name),
+        )
     )
 
 
@@ -448,7 +491,7 @@ def storage_report(
     if ext_name:
         args.extend(["-Extension", ext_name])
 
-    result_json = _run_storage_op(
+    payload = _run_storage_op(
         args,
         objects=[],
         target=target,
@@ -456,16 +499,11 @@ def storage_report(
         force_close=force_close,
         reopen_designer=reopen_designer,
         work=work,
+        extension_storage=bool(ext_name),
     )
-    # Attach path hint
-    import json
-
-    try:
-        data = json.loads(result_json)
-        data["reportPath"] = str(out)
-        return json_result(data)
-    except Exception:
-        return result_json
+    payload["reportPath"] = str(out)
+    payload["reportExists"] = out.is_file()
+    return json_result(payload)
 
 
 if __name__ == "__main__":

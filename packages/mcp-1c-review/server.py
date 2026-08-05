@@ -8,11 +8,21 @@ _ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_ROOT / "shared"))
 
 from onec_mcp_shared import env, json_result, load_env_files  # noqa: E402
+from onec_mcp_shared.work_gates import is_forbidden_secret_path, path_is_under  # noqa: E402
 from onec_mcp_shared.server_run import make_mcp, run_mcp  # noqa: E402
 
 load_env_files(Path(__file__).with_name(".env"), Path.cwd() / ".env")
 
 mcp = make_mcp("1c-review")
+
+
+def _review_roots() -> list[Path]:
+    roots: list[Path] = []
+    for key in ("CONFIG_DUMP_DIR", "REPO_CF", "REPO_CFE"):
+        v = env(key)
+        if v and Path(v).is_dir():
+            roots.append(Path(v))
+    return roots
 
 
 def _rules_path() -> Path:
@@ -89,10 +99,26 @@ def review_check(paths: list[str] | None = None, text: str | None = None) -> str
     if text is not None:
         # Use .bsl suffix so file_glob filters (e.g. *.bsl) still apply to snippets
         files.append(("<snippet>.bsl", text))
+    roots = _review_roots()
     for p in paths or []:
         path = Path(p)
-        if path.is_file():
-            files.append((str(path), path.read_text(encoding="utf-8", errors="replace")))
+        if is_forbidden_secret_path(path):
+            return json_result({"ok": False, "error": f"Refusing secret path: {path.name}", "stop": True})
+        if not path.is_file():
+            continue
+        if roots and not any(path_is_under(path.resolve(), r) for r in roots):
+            return json_result(
+                {
+                    "ok": False,
+                    "error": f"Path outside REPO_CF/REPO_CFE: {path}",
+                    "stop": True,
+                }
+            )
+        if not roots:
+            return json_result(
+                {"ok": False, "error": "Set REPO_CF / REPO_CFE before review_check(paths=...)", "stop": True}
+            )
+        files.append((str(path), path.read_text(encoding="utf-8", errors="replace")))
 
     if not files:
         # default: scan CONFIG_DUMP_DIR sample? refuse

@@ -20,6 +20,7 @@ from onec_mcp_shared import (  # noqa: E402
     run_designer,
     write_list_file,
 )
+from onec_mcp_shared.work_gates import forms_incomplete_after_dump  # noqa: E402
 from onec_mcp_shared.server_run import make_mcp, run_mcp  # noqa: E402
 from onec_mcp_shared.session import with_managed_session  # noqa: E402
 
@@ -64,6 +65,7 @@ def dump_objects(
     target_dir: str | None = None,
     extension: str | bool | None = None,
     merge_into_repo: bool = True,
+    confirm_merge_dev: bool = False,
     force_full: bool = False,
     target: str = "dev",
     manage_session: bool = False,
@@ -73,10 +75,7 @@ def dump_objects(
     """
     Partial dump via Designer -listFile.
     target: 'dev' (sandbox) or 'work' (daily Configurator IB).
-    manage_session: close only the target IB, dump, then reopen on work like starter.
-    reopen_designer: None = auto (True on work, False on dev).
-    objects: ONLY metadata for the current task — do not add 'related' catalogs/extensions
-    unless the user explicitly asked for them.
+    merge_into_repo on DEV requires confirm_merge_dev=true (refuses silent wipe of repo).
     """
     if force_full and not objects:
         return json_result({"ok": False, "error": "Full dump into repo is disabled. Pass objects."})
@@ -89,6 +88,16 @@ def dump_objects(
         return json_result({"ok": False, "error": str(exc)})
 
     t = (target or "dev").strip().lower()
+    if merge_into_repo and t in ("dev", "develop", "sandbox", "base2") and not confirm_merge_dev:
+        return json_result(
+            {
+                "ok": False,
+                "error": "Refusing merge_into_repo=true from DEV without confirm_merge_dev=true.",
+                "step": "refuse_dev_merge",
+                "hint": "Use target=work for Configurator truth, or set confirm_merge_dev=true deliberately.",
+                "stop": True,
+            }
+        )
     if reopen_designer is None:
         reopen_designer = t in ("work", "prod", "base3")
     if t in ("dev", "develop", "sandbox", "base2"):
@@ -204,6 +213,16 @@ def dump_objects(
                 "Open IB from 1C list (storage connected) or set ONEC_STORAGE_*, "
                 "then re-dump. Never fill Ext from git REPO_CF."
             )
+    missing_forms = forms_incomplete_after_dump(canon, dump_dir, result.dumped_paths or [])
+    if missing_forms and payload.get("ok"):
+        payload["ok"] = False
+        payload["step"] = "fix_forms_incomplete"
+        payload["missingForms"] = missing_forms
+        payload["message"] = (
+            "Dump missing Forms/.../Ext/Form.xml. Do not patch/load form from stale git. "
+            "Re-dump with storage attached; include Document.X.Form.Y in objects list."
+        )
+        payload["stop"] = True
     if result.storage_error:
         payload["message"] = (
             "Designer reported configuration storage / lock issue. Capture: "
@@ -232,9 +251,32 @@ def dump_changes(
     config_dump_info_path: str | None = None,
     extension: str | bool | None = None,
     merge_into_repo: bool = True,
+    confirm_merge_dev: bool = False,
     target: str = "dev",
 ) -> str:
     """Incremental dump vs ConfigDumpInfo.xml from DEV by default."""
+    t = (target or "dev").strip().lower()
+    if merge_into_repo and t in ("dev", "develop", "sandbox", "base2") and not confirm_merge_dev:
+        return json_result(
+            {
+                "ok": False,
+                "error": "Refusing merge_into_repo=true from DEV without confirm_merge_dev=true.",
+                "step": "refuse_dev_merge",
+                "stop": True,
+            }
+        )
+    if is_work_target(t):
+        try:
+            require_storage_path()
+        except ValueError as exc:
+            return json_result(
+                {
+                    "ok": False,
+                    "error": str(exc),
+                    "step": "require_storage_for_work",
+                    "stop": True,
+                }
+            )
     ext_name = None
     if extension is True:
         ext_name = env("ONEC_EXTENSION")
@@ -250,7 +292,14 @@ def dump_changes(
     if ext_name:
         args.extend(["-Extension", ext_name])
     args.extend(["-update", "-configDumpInfoForChanges", str(info), "-Format", "Hierarchical"])
-    result = run_designer(args, work_dir=dump_dir, objects=[], target=target)
+    result = run_designer(
+        args,
+        work_dir=dump_dir,
+        objects=[],
+        target=target,
+        attach_storage=is_work_target(t),
+        extension_storage=bool(ext_name) and is_work_target(t),
+    )
     result.dump_dir = str(dump_dir)
     result.dumped_paths = list_dumped_paths(dump_dir)
     payload = result.to_dict()

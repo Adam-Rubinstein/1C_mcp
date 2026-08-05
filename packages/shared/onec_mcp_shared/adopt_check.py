@@ -87,6 +87,7 @@ def check_adopted_uuids(
     *,
     repo_cf: str | Path | None,
     repo_cfe: str | Path | None,
+    fail_if_repos_missing: bool = False,
 ) -> dict[str, Any]:
     """
     For each Adopted ExtendedConfigurationObject in cfe, require that uuid
@@ -95,6 +96,15 @@ def check_adopted_uuids(
     cf_root = Path(repo_cf) if repo_cf else None
     cfe_root = Path(repo_cfe) if repo_cfe else None
     if not cf_root or not cf_root.is_dir() or not cfe_root or not cfe_root.is_dir():
+        if fail_if_repos_missing:
+            return {
+                "ok": False,
+                "skipped": False,
+                "reason": "REPO_CF / REPO_CFE not set or missing (required on WORK)",
+                "mismatches": [],
+                "missingInMain": [],
+                "message": "Set REPO_CF and REPO_CFE for Adopted UUID gate on WORK load.",
+            }
         return {
             "ok": True,
             "skipped": True,

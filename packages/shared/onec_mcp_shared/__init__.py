@@ -440,6 +440,17 @@ TYPE_TO_FOLDER = {
 }
 
 
+# Nested metadata under an object (load hierarchical paths)
+_CHILD_KIND_FOLDER = {
+    "Form": "Forms",
+    "Форма": "Forms",
+    "Command": "Commands",
+    "Команда": "Commands",
+    "Template": "Templates",
+    "Макет": "Templates",
+}
+
+
 def object_to_list_entry(name: str, *, for_load: bool = False) -> str:
     """Metadata name for dump listFile; hierarchical relative path for load listFile."""
     canon = normalize_object_name(name)
@@ -448,8 +459,16 @@ def object_to_list_entry(name: str, *, for_load: bool = False) -> str:
         return "Configuration.xml"
     if not for_load or "." not in canon:
         return canon
-    kind, obj = canon.split(".", 1)
+    parts = canon.split(".")
+    kind = parts[0]
     folder = TYPE_TO_FOLDER.get(kind, kind + "s")
+    # Document.X.Form.Y → Documents/X/Forms/Y.xml
+    if len(parts) >= 4 and parts[2] in _CHILD_KIND_FOLDER:
+        obj_name = parts[1]
+        child_folder = _CHILD_KIND_FOLDER[parts[2]]
+        child_name = ".".join(parts[3:])
+        return f"{folder}/{obj_name}/{child_folder}/{child_name}.xml"
+    obj = ".".join(parts[1:])
     return f"{folder}/{obj}.xml"
 
 

@@ -30,6 +30,40 @@ def test_object_to_list_entry_configuration_load():
     assert object_to_list_entry("Конфигурация", for_load=True) == "Configuration.xml"
     assert object_to_list_entry("Configuration", for_load=False) == "Configuration"
     assert object_to_list_entry("Document.A", for_load=True) == "Documents/A.xml"
+    assert (
+        object_to_list_entry("Document.ПроизводствоБезЗаказа.Form.Эст_ПБЗ_Мини_ГруппаЗакрепки", for_load=True)
+        == "Documents/ПроизводствоБезЗаказа/Forms/Эст_ПБЗ_Мини_ГруппаЗакрепки.xml"
+    )
+    assert (
+        object_to_list_entry("Document.X.Form.Y", for_load=False) == "Document.X.Form.Y"
+    )
+
+
+def test_work_gates_aligned_and_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from onec_mcp_shared import work_gates as wg
+
+    monkeypatch.setenv("DUMP_TMP_ROOT", str(tmp_path))
+    objs = ["Document.Foo", "CommonModule.Bar"]
+    wg.write_aligned_marker(objs, target="work", extension=None)
+    assert wg.check_storage_aligned(objs, target="work", extension=None, storage_aligned=False) is not None
+    assert wg.check_storage_aligned(objs, target="work", extension=None, storage_aligned=True) is None
+    assert (
+        wg.check_storage_aligned(["Document.Other"], target="work", extension=None, storage_aligned=True)
+        is not None
+    )
+    wg.write_lock_receipt(objs, target="work", extension=None)
+    assert wg.check_lock_receipt(objs, target="work", extension=None, storage_captured=True) is None
+    assert wg.check_lock_receipt(objs, target="work", extension=None, storage_captured=False) is not None
+
+
+def test_entire_config_env(monkeypatch: pytest.MonkeyPatch):
+    from onec_mcp_shared.work_gates import entire_config_allowed, refuse_entire_without_env
+
+    monkeypatch.delenv("ALLOW_ENTIRE_STORAGE_OPS", raising=False)
+    assert refuse_entire_without_env(entire_config=True) is not None
+    monkeypatch.setenv("ALLOW_ENTIRE_STORAGE_OPS", "1")
+    assert entire_config_allowed() is True
+    assert refuse_entire_without_env(entire_config=True) is None
 
 
 def test_write_list_file_bom(tmp_path: Path):
@@ -197,7 +231,7 @@ def test_storage_cli_args(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_storage_cli_empty_password_not_ib_fallback(monkeypatch: pytest.MonkeyPatch):
-    """Empty storage password must not become ONEC_PASSWORD_WORK."""
+    """Empty storage password: omit /P (Designer auth); never use ONEC_PASSWORD_WORK."""
     from onec_mcp_shared import session as sess
 
     monkeypatch.setenv("ONEC_STORAGE_PATH", r"\\1cmini\ХранилищеЕрп5_23\\")
@@ -207,8 +241,8 @@ def test_storage_cli_empty_password_not_ib_fallback(monkeypatch: pytest.MonkeyPa
     args = sess.storage_cli_args()
     assert "/ConfigurationRepositoryN" in args
     assert "РубинштейнА" in args
-    p_idx = args.index("/ConfigurationRepositoryP")
-    assert args[p_idx + 1] == ""
+    # Empty password: flag omitted (some builds treat empty /P as auth failure).
+    assert "/ConfigurationRepositoryP" not in args
     assert "123321" not in args
 
 

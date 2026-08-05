@@ -32,7 +32,10 @@ from onec_mcp_shared.config_root import (  # noqa: E402
     sanity_check_configuration,
     write_prepared_marker,
 )
-import shutil  # noqa: E402
+from onec_mcp_shared.work_gates import (  # noqa: E402
+    check_lock_receipt,
+    check_storage_aligned,
+)
 
 load_env_files(Path(__file__).with_name(".env"), Path.cwd() / ".env", Path(_ROOT).parent / ".env")
 
@@ -457,8 +460,12 @@ def load_prepare_work(
         ext_name = extension
     lines = [
         "Перед загрузкой в WORK:",
-        "1) При необходимости storage_get(objects) — выровнять с хранилищем.",
-        "2) Захватить (storage_lock или вручную в Конфигураторе):",
+        "1) storage_get(objects) — обязателен (пишет aligned marker).",
+        "2) dump_objects(target=work) → точечный патч.",
+        "3) storage_lock(objects) — пишет lock receipt (или UI-захват + storage_lock).",
+        "4) load_objects(..., confirm=true, storage_aligned=true, storage_captured=true).",
+        "",
+        "Захватить:",
         "",
     ]
     for i, name in enumerate(canon, 1):
@@ -470,7 +477,8 @@ def load_prepare_work(
     lines.extend(
         [
             "",
-            "Правильный порядок: dump-from-work → точечный патч → lock → load (с ONEC_STORAGE_*).",
+            "Правильный порядок: storage_get → dump-from-work → точечный патч → storage_lock → load.",
+            "load_objects WORK: storage_aligned=true + storage_captured=true (маркеры от get/lock).",
             "После захвата: «я захватил» / «делай». Поместить (storage_commit) — только по явной просьбе.",
             "До подтверждения агент НЕ вызывает load_objects на WORK.",
         ]
@@ -492,6 +500,7 @@ def load_prepare_work(
                     "objects": canon,
                     "target": "work",
                     "confirm": True,
+                    "storage_aligned": True,
                     "storage_captured": True,
                     "extension": extension if extension is not None else None,
                 },
@@ -508,19 +517,20 @@ def load_objects(
     extension: str | bool | None = None,
     confirm: bool = False,
     storage_captured: bool = False,
+    storage_aligned: bool = False,
     target: str = "dev",
     manage_session: bool = False,
     force_close: bool = False,
     reopen_designer: bool | None = None,
     restart_even_on_fail: bool = True,
 ) -> str:
-    """Partial load into IB. confirm=true required; WORK also needs storage_captured=true."""
+    """Partial load. confirm=true. WORK needs storage_aligned+storage_captured (get/lock receipts)."""
     if not confirm:
         return json_result(
             {
                 "ok": False,
                 "error": "Refusing load without confirm=true.",
-                "hint": "For WORK: call load_prepare_work first, wait until user captured objects, then confirm=true and storage_captured=true.",
+                "hint": "WORK: storage_get → dump → patch → storage_lock → load with confirm, storage_aligned, storage_captured.",
             }
         )
     if not objects:
@@ -533,8 +543,19 @@ def load_objects(
 
     t = (target or "dev").strip().lower()
     canon = _canon_objects(objects)
-    adopt = check_adopted_uuids(canon, repo_cf=env("REPO_CF"), repo_cfe=env("REPO_CFE"))
-    if not adopt.get("ok", True) and not adopt.get("skipped"):
+    ext_name_preview = None
+    if extension is True:
+        ext_name_preview = env("ONEC_EXTENSION")
+    elif isinstance(extension, str) and extension:
+        ext_name_preview = extension
+
+    adopt = check_adopted_uuids(
+        canon,
+        repo_cf=env("REPO_CF"),
+        repo_cfe=env("REPO_CFE"),
+        fail_if_repos_missing=_is_work_target(t),
+    )
+    if not adopt.get("ok", True):
         return json_result(
             {
                 "ok": False,
@@ -542,17 +563,11 @@ def load_objects(
                 "step": "fix_adopted_uuids",
                 "adoptCheck": adopt,
                 "objects": canon,
-                "message": adopt.get("message"),
+                "message": adopt.get("message") or adopt.get("reason"),
                 "stop": True,
             }
         )
 
-    # Default source before gate (gate compares to REPO_CF)
-    ext_name_preview = None
-    if extension is True:
-        ext_name_preview = env("ONEC_EXTENSION")
-    elif isinstance(extension, str) and extension:
-        ext_name_preview = extension
     src_preview = Path(
         source_dir or (env("REPO_CFE") if ext_name_preview else env("REPO_CF") or "")
     )
@@ -572,26 +587,27 @@ def load_objects(
             }
         )
 
-    if _is_work_target(t) and not storage_captured:
-        return json_result(
-            {
-                "ok": False,
-                "error": "Refusing load to WORK without storage_captured=true.",
-                "step": "capture_then_approve",
-                "objectsToCapture": canon,
-                "adoptCheck": adopt,
-                "message": (
-                    "Сначала захватите в хранилище (storage_lock или UI):\n"
-                    + "\n".join(f"- {o}" for o in canon)
-                    + "\n\nКогда готово — напишите «я захватил» / «делай». "
-                    "Агент вызовет load_objects с storage_captured=true."
-                ),
-                "stop": True,
-                "hint": "Call load_prepare_work(objects=...) and stop until user approval.",
-            }
-        )
-
     if _is_work_target(t):
+        aligned_err = check_storage_aligned(
+            canon,
+            target=t,
+            extension=ext_name_preview,
+            storage_aligned=storage_aligned,
+        )
+        if aligned_err:
+            aligned_err["objectsToCapture"] = canon
+            aligned_err["adoptCheck"] = adopt
+            return json_result(aligned_err)
+        lock_err = check_lock_receipt(
+            canon,
+            target=t,
+            extension=ext_name_preview,
+            storage_captured=storage_captured,
+        )
+        if lock_err:
+            lock_err["objectsToCapture"] = canon
+            lock_err["adoptCheck"] = adopt
+            return json_result(lock_err)
         try:
             require_storage_path()
         except ValueError as exc:

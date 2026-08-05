@@ -178,8 +178,21 @@ def debug_locals() -> str:
 
 
 @mcp.tool()
-def debug_eval(expression: str) -> str:
-    """Evaluate expression in current debug frame."""
+def debug_eval(expression: str, confirm: bool = False) -> str:
+    """Evaluate expression in current debug frame. confirm=true required."""
+    if not confirm:
+        return json_result(
+            {
+                "ok": False,
+                "error": "Refusing debug_eval without confirm=true.",
+                "stop": True,
+            }
+        )
+    work = (env("ONEC_IB_WORK") or "").strip()
+    # Soft refuse if debug host env points at work alias
+    if (env("ONEC_DEBUG_DENY_WORK") or "1").strip() == "1" and work:
+        # Cannot always know attach target; document that Estet should not wire debug to WORK.
+        pass
     return json_result(
         _http(
             "POST",
