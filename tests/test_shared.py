@@ -331,3 +331,11 @@ def test_review_check_pattern(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     assert result["ok"] is True
     ids = {f["rule"] for f in result["findings"]}
     assert "no-current-date" in ids
+
+def test_refuse_parent_object_without_confirm():
+    from onec_mcp_shared.work_gates import refuse_parent_object_without_confirm as r
+
+    assert r(["Document.Foo"]) is not None
+    assert r(["Document.Foo.Form.Bar"]) is None
+    assert r(["CommonModule.Foo"]) is None
+    assert r(["Document.Foo"], confirm_parent_object=True) is None

@@ -22,6 +22,7 @@ from onec_mcp_shared import (  # noqa: E402
 )
 from onec_mcp_shared.work_gates import (  # noqa: E402
     refuse_entire_without_env,
+    refuse_parent_object_without_confirm,
     write_aligned_marker,
     write_lock_receipt,
 )
@@ -283,6 +284,7 @@ def storage_lock(
     confirm_revised: bool = False,
     entire_config: bool = False,
     confirm_entire: bool = False,
+    confirm_parent_object: bool = False,
     extension: str | bool | None = None,
     manage_session: bool = True,
     force_close: bool = True,
@@ -303,6 +305,12 @@ def storage_lock(
     if err:
         return err
     assert canon is not None
+    if not entire_config:
+        parent_err = refuse_parent_object_without_confirm(
+            canon, confirm_parent_object=confirm_parent_object
+        )
+        if parent_err:
+            return json_result(parent_err)
 
     work = Path(env("DUMP_TMP_ROOT", str(Path.cwd() / ".tmp" / "1c-storage"))) / now_stamp()
     work.mkdir(parents=True, exist_ok=True)

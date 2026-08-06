@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 import sys
 from pathlib import Path
 
@@ -35,6 +36,8 @@ from onec_mcp_shared.config_root import (  # noqa: E402
 from onec_mcp_shared.work_gates import (  # noqa: E402
     check_lock_receipt,
     check_storage_aligned,
+    forms_incomplete_in_source,
+    refuse_parent_object_without_confirm,
 )
 
 load_env_files(Path(__file__).with_name(".env"), Path.cwd() / ".env", Path(_ROOT).parent / ".env")
@@ -518,6 +521,7 @@ def load_objects(
     confirm: bool = False,
     storage_captured: bool = False,
     storage_aligned: bool = False,
+    confirm_parent_object: bool = False,
     target: str = "dev",
     manage_session: bool = False,
     force_close: bool = False,
@@ -543,6 +547,11 @@ def load_objects(
 
     t = (target or "dev").strip().lower()
     canon = _canon_objects(objects)
+    parent_err = refuse_parent_object_without_confirm(
+        canon, confirm_parent_object=confirm_parent_object
+    )
+    if parent_err:
+        return json_result(parent_err)
     ext_name_preview = None
     if extension is True:
         ext_name_preview = env("ONEC_EXTENSION")
@@ -639,6 +648,19 @@ def load_objects(
     src = Path(source_dir or (env("REPO_CFE") if ext_name else env("REPO_CF") or ""))
     if not src.is_dir():
         return json_result({"ok": False, "error": f"source_dir not found: {src}"})
+
+    missing_forms = forms_incomplete_in_source(canon, src)
+    if missing_forms:
+        return json_result(
+            {
+                "ok": False,
+                "error": "source_dir missing Forms/.../Ext/Form.xml for Form objects.",
+                "step": "fix_forms_incomplete",
+                "missingForms": missing_forms,
+                "stop": True,
+                "hint": "Dump Form from WORK with storage attached; do not escalate to whole Document.",
+            }
+        )
 
     work = Path(env("DUMP_TMP_ROOT", str(Path.cwd() / ".tmp" / "1c-load"))) / now_stamp()
     work.mkdir(parents=True, exist_ok=True)

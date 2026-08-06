@@ -43,7 +43,14 @@ MCP (Model Context Protocol) — способ подключить к ИИ-ре�
 | **DEV** | `ONEC_IB_DEV` | Песочница (часто копия без хранилища). Сюда dump/load для проверки |
 | **WORK** | `ONEC_IB_WORK` | Рабочая база (часто с хранилищем). Load только когда вы готовы |
 
-По умолчанию dump и load идут в **dev**. В **work**: если захват ещё не подтверждён — `load_prepare_work` → пользователь захватывает → затем `load_objects(..., target="work", confirm=true, storage_captured=true)`. Если пользователь уже сказал «я захватил» / «делай» — сразу load с `storage_captured=true` (без повторного стопа). Без `storage_captured=true` load в WORK **отклоняется**.
+По умолчанию dump и load идут в **dev**. В **work** обязательная цепочка:
+
+1. `storage_get` → aligned marker  
+2. `dump_objects(target=work)` → точечный патч  
+3. `storage_lock` только нужных объектов (**не** весь `Document.X` ради одной Form)  
+4. `load_objects(..., confirm=true, storage_aligned=true, storage_captured=true)`  
+
+Без marker / без lock receipt load в WORK **отклоняется**. Bare `Document.X` / `Catalog.X` в lock/load — **отказ**, пока не `confirm_parent_object=true` (инцидент 1286).
 
 **Состав объектов:** в `objects` только то, что относится к **текущей задаче**. Не тащить «связанные» справочники/расширения без явной просьбы пользователя (агентское правило в репозитории Estet: `1c-mcp-ib-targets`).
 
@@ -98,10 +105,12 @@ python scripts\smoke_test.py --live-ib
 
 **Загрузка в work (сначала захват в хранилище):**
 
-1. `load_prepare_work(objects=[...])` — чеклист, агент **ждёт** «я захватил» / «делай»
-2. `load_objects(..., confirm=true, storage_captured=true, target="work", manage_session=true, force_close=true)`
+1. `storage_get(objects=[...])` — обязателен  
+2. `dump_objects(target=work)` → патч  
+3. `storage_lock` только Form/Module задачи задачи (`Document.X.Form.Y`, не `Document.X`)  
+4. `load_objects(..., confirm=true, storage_aligned=true, storage_captured=true, target="work", manage_session=true, force_close=true)`
 
-(на work `reopen_designer` по умолчанию true — как из списка баз; опционально `ONEC_STORAGE_*`)
+(на work `reopen_designer` по умолчанию true; `ONEC_STORAGE_*` обязательны)
 
 **Справка платформы:**
 

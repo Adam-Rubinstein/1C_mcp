@@ -14,8 +14,14 @@ from . import env, normalize_object_name
 
 
 def _gates_root() -> Path:
-    root = Path(env("DUMP_TMP_ROOT", str(Path.cwd() / ".tmp" / "1c")) or ".tmp/1c")
-    path = root / "gates"
+    """Shared gates dir for dump/load/storage (stdio are separate processes)."""
+    explicit = (env("MCP_GATES_ROOT") or "").strip()
+    if explicit:
+        path = Path(explicit)
+    else:
+        dump_tmp = Path(env("DUMP_TMP_ROOT", str(Path.cwd() / ".tmp" / "1c")) or ".tmp/1c")
+        # …/.tmp/load and …/.tmp/storage → shared …/.tmp/gates
+        path = dump_tmp.parent / "gates"
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -317,12 +323,67 @@ def refuse_work_ib_path(ib: str | None) -> dict[str, Any] | None:
     return None
 
 
+_PARENT_KINDS = {
+    "document",
+    "catalog",
+    "dataprocessor",
+    "report",
+    "chartofcharacteristictypes",
+    "chartofaccounts",
+    "chartofcalculationtypes",
+    "businessprocess",
+    "task",
+    "exchangeplan",
+    "documentjournal",
+    "enum",
+    "informationregister",
+    "accumulationregister",
+    "accountingregister",
+    "calculationregister",
+}
+
+
+def refuse_parent_object_without_confirm(
+    objects: list[str],
+    *,
+    confirm_parent_object: bool = False,
+) -> dict[str, Any] | None:
+    """Refuse bare Document.X / Catalog.X (no .Form.) unless confirm_parent_object.
+
+    Incident 1286: locking/loading whole Document to push one Form overwrote all forms.
+    """
+    if confirm_parent_object:
+        return None
+    parents: list[str] = []
+    for raw in objects:
+        canon = normalize_object_name(raw)
+        parts = canon.split(".")
+        if len(parts) != 2:
+            continue
+        if parts[0].lower() in _PARENT_KINDS:
+            parents.append(canon)
+    if not parents:
+        return None
+    return {
+        "ok": False,
+        "error": (
+            "Refusing parent metadata object without confirm_parent_object=true "
+            f"(got: {', '.join(parents)}). Lock/load only Document.X.Form.Y "
+            "or set confirm_parent_object=true deliberately (incident 1286)."
+        ),
+        "step": "refuse_parent_object",
+        "parentObjects": parents,
+        "stop": True,
+        "hint": "Use Document.X.Form.Y (and Module via form path), not Document.X.",
+    }
+
+
 def forms_incomplete_after_dump(
     objects: list[str],
     dump_dir: Path,
     dumped_paths: list[str],
 ) -> list[str]:
-    """Return missing Ext/Form.xml paths for Form objects in the dump list."""
+    """Return missing Ext/Form.xml paths for managed Form objects in the dump list."""
     from . import object_to_list_entry
 
     missing: list[str] = []
@@ -337,16 +398,59 @@ def forms_incomplete_after_dump(
         entry = object_to_list_entry(canon, for_load=True)
         if not entry.endswith(".xml"):
             continue
+        meta_path = dump_dir / entry.replace("/", os.sep)
+        if meta_path.is_file():
+            try:
+                meta_txt = meta_path.read_text(encoding="utf-8-sig", errors="replace")
+            except OSError:
+                meta_txt = ""
+            if "<FormType>Ordinary</FormType>" in meta_txt or "<FormType>OrdinaryForm</FormType>" in meta_txt:
+                # Ordinary (thick) forms have no Ext/Form.xml in hierarchical dump.
+                continue
         base = entry[:-4]
         need = f"{base}/Ext/Form.xml"
         if need not in path_set and not (dump_dir / need.replace("/", os.sep)).is_file():
             missing.append(need)
-    # Also: any Forms/<name>.xml dumped without Ext/Form.xml
     for p in list(path_set):
         if "/Forms/" in p and p.endswith(".xml") and "/Ext/" not in p:
+            meta = dump_dir / p.replace("/", os.sep)
+            if meta.is_file():
+                try:
+                    meta_txt = meta.read_text(encoding="utf-8-sig", errors="replace")
+                except OSError:
+                    meta_txt = ""
+                if "<FormType>Ordinary</FormType>" in meta_txt:
+                    continue
             base = p[:-4]
             need = f"{base}/Ext/Form.xml"
             if need not in path_set and not (dump_dir / need.replace("/", os.sep)).is_file():
                 if need not in missing:
                     missing.append(need)
+    return missing
+
+
+def forms_incomplete_in_source(objects: list[str], source_dir: Path) -> list[str]:
+    """Missing Ext/Form.xml under source_dir for managed Form objects (load gate)."""
+    from . import object_to_list_entry
+
+    missing: list[str] = []
+    for raw in objects:
+        canon = normalize_object_name(raw)
+        parts = canon.split(".")
+        if len(parts) < 4 or parts[2].lower() not in ("form", "форма"):
+            continue
+        entry = object_to_list_entry(canon, for_load=True)
+        if not entry.endswith(".xml"):
+            continue
+        meta_path = source_dir / entry.replace("/", os.sep)
+        if meta_path.is_file():
+            try:
+                meta_txt = meta_path.read_text(encoding="utf-8-sig", errors="replace")
+            except OSError:
+                meta_txt = ""
+            if "<FormType>Ordinary</FormType>" in meta_txt:
+                continue
+        need = f"{entry[:-4]}/Ext/Form.xml"
+        if not (source_dir / need.replace("/", os.sep)).is_file():
+            missing.append(need)
     return missing
