@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import hmac
 import json
 import os
+import subprocess
 import time
 from pathlib import Path
 from typing import Any
@@ -45,44 +47,7 @@ def _ttl_sec() -> int:
         return 86400
 
 
-def write_aligned_marker(
-    objects: list[str],
-    *,
-    target: str = "work",
-    extension: str | None = None,
-) -> Path:
-    canon = _norm_objects(objects)
-    path = _gates_root() / f"aligned_{_key(target, extension)}.json"
-    data = {
-        "kind": "storage_aligned",
-        "target": (target or "work").strip().lower(),
-        "extension": extension,
-        "objects": canon,
-        "entire": len(canon) == 0,
-        "ts": time.time(),
-    }
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    return path
-
-
-def write_lock_receipt(
-    objects: list[str],
-    *,
-    target: str = "work",
-    extension: str | None = None,
-) -> Path:
-    canon = _norm_objects(objects)
-    path = _gates_root() / f"lock_{_key(target, extension)}.json"
-    data = {
-        "kind": "storage_lock_receipt",
-        "target": (target or "work").strip().lower(),
-        "extension": extension,
-        "objects": canon,
-        "entire": len(canon) == 0,
-        "ts": time.time(),
-    }
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    return path
+# write_aligned_marker / write_lock_receipt: per-object files (see below).
 
 
 def _read_gate(path: Path) -> dict[str, Any] | None:
@@ -102,98 +67,7 @@ def _covers(marker_objects: list[str], entire: bool, needed: list[str]) -> bool:
     return need <= have
 
 
-def check_storage_aligned(
-    objects: list[str],
-    *,
-    target: str,
-    extension: str | None,
-    storage_aligned: bool,
-) -> dict[str, Any] | None:
-    """Return error dict if WORK load must refuse; None if OK."""
-    if not storage_aligned:
-        return {
-            "ok": False,
-            "error": "Refusing WORK load without storage_aligned=true.",
-            "step": "storage_get_then_aligned",
-            "hint": "Call storage_get(objects=..., target=work) first, then load with storage_aligned=true.",
-            "stop": True,
-        }
-    path = _gates_root() / f"aligned_{_key(target, extension)}.json"
-    data = _read_gate(path)
-    if not data or data.get("kind") != "storage_aligned":
-        return {
-            "ok": False,
-            "error": "No storage_aligned marker. Run storage_get for these objects first.",
-            "step": "storage_get_then_aligned",
-            "markerPath": str(path),
-            "stop": True,
-        }
-    age = time.time() - float(data.get("ts") or 0)
-    if age > _ttl_sec():
-        return {
-            "ok": False,
-            "error": "storage_aligned marker expired. Re-run storage_get.",
-            "step": "storage_get_then_aligned",
-            "ageSec": int(age),
-            "stop": True,
-        }
-    if not _covers(list(data.get("objects") or []), bool(data.get("entire")), objects):
-        return {
-            "ok": False,
-            "error": "storage_aligned marker does not cover all load objects.",
-            "step": "storage_get_then_aligned",
-            "markerObjects": data.get("objects"),
-            "needed": _norm_objects(objects),
-            "stop": True,
-        }
-    return None
-
-
-def check_lock_receipt(
-    objects: list[str],
-    *,
-    target: str,
-    extension: str | None,
-    storage_captured: bool,
-) -> dict[str, Any] | None:
-    """Return error dict if WORK load must refuse; None if OK."""
-    if not storage_captured:
-        return {
-            "ok": False,
-            "error": "Refusing load to WORK without storage_captured=true.",
-            "step": "capture_then_approve",
-            "stop": True,
-        }
-    path = _gates_root() / f"lock_{_key(target, extension)}.json"
-    data = _read_gate(path)
-    if not data or data.get("kind") != "storage_lock_receipt":
-        return {
-            "ok": False,
-            "error": "No lock receipt. Run storage_lock (or UI capture then storage_lock) first.",
-            "step": "storage_lock_receipt",
-            "markerPath": str(path),
-            "hint": "storage_captured=true alone is not enough; MCP needs a receipt from storage_lock.",
-            "stop": True,
-        }
-    age = time.time() - float(data.get("ts") or 0)
-    if age > _ttl_sec():
-        return {
-            "ok": False,
-            "error": "Lock receipt expired. Re-run storage_lock.",
-            "step": "storage_lock_receipt",
-            "ageSec": int(age),
-            "stop": True,
-        }
-    if not _covers(list(data.get("objects") or []), bool(data.get("entire")), objects):
-        return {
-            "ok": False,
-            "error": "Lock receipt does not cover all load objects.",
-            "step": "storage_lock_receipt",
-            "receiptObjects": data.get("objects"),
-            "needed": _norm_objects(objects),
-            "stop": True,
-        }
-    return None
+# check_storage_aligned / check_lock_receipt: per-object + captured-skip-get (see below).
 
 
 def entire_config_allowed() -> bool:
@@ -454,3 +328,608 @@ def forms_incomplete_in_source(objects: list[str], source_dir: Path) -> list[str
         if not (source_dir / need.replace("/", os.sep)).is_file():
             missing.append(need)
     return missing
+
+
+# --- Parallel agents / Designer mutex (2026-08-19 incidents 5359 / 5361) ---
+
+_SKIP_DIRTY = frozenset({"objects.txt", "designer.out", "configdumpinfo.xml"})
+_DESIGNER_BUSY_HINTS = (
+    "уже открыта конфигуратором",
+    "информационная база уже открыта",
+    "already opened by configurator",
+)
+
+
+class DesignerBusy(Exception):
+    def __init__(self, payload: dict[str, Any]):
+        super().__init__(payload.get("error") or "work_designer_busy")
+        self.payload = payload
+
+
+def _is_work(target: str) -> bool:
+    return (target or "").strip().lower() in ("work", "prod", "base3")
+
+
+def _object_file_key(obj: str) -> str:
+    canon = normalize_object_name(obj)
+    return "".join(c if c.isalnum() or c in "-_." else "_" for c in canon)[:180]
+
+
+def _object_marker_path(kind: str, target: str, extension: str | None, obj: str) -> Path:
+    return _gates_root() / f"{kind}_{_key(target, extension)}__{_object_file_key(obj)}.json"
+
+
+def _pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+    except SystemError:
+        return False
+
+
+def _int_env(name: str, default: int) -> int:
+    raw = env(name, str(default))
+    try:
+        return max(1, int(raw or default))
+    except ValueError:
+        return default
+
+
+def require_work_task(task: str | None, *, target: str) -> dict[str, Any] | None:
+    if not _is_work(target):
+        return None
+    if (task or "").strip():
+        return None
+    return {
+        "ok": False,
+        "error": "WORK dump/load/get/lock requires task= (TZ number). Refusing without it.",
+        "step": "require_task",
+        "hint": "Pass task='5359' (your TZ number). Same task may re-enter the object lock.",
+        "stop": True,
+    }
+
+
+def write_aligned_marker(
+    objects: list[str],
+    *,
+    target: str = "work",
+    extension: str | None = None,
+) -> Path:
+    canon = _norm_objects(objects)
+    ts = time.time()
+    for obj in canon:
+        path = _object_marker_path("aligned", target, extension, obj)
+        path.write_text(
+            json.dumps(
+                {
+                    "kind": "storage_aligned",
+                    "target": (target or "work").strip().lower(),
+                    "extension": extension,
+                    "objects": [obj],
+                    "entire": False,
+                    "ts": ts,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    bundle = _gates_root() / f"aligned_{_key(target, extension)}.json"
+    prev = _read_gate(bundle) or {}
+    have = set(_norm_objects(list(prev.get("objects") or [])))
+    have.update(canon)
+    merged = sorted(have)
+    entire = bool(prev.get("entire")) and not canon
+    bundle.write_text(
+        json.dumps(
+            {
+                "kind": "storage_aligned",
+                "target": (target or "work").strip().lower(),
+                "extension": extension,
+                "objects": merged,
+                "entire": entire,
+                "ts": ts,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return bundle
+
+
+def write_lock_receipt(
+    objects: list[str],
+    *,
+    target: str = "work",
+    extension: str | None = None,
+) -> Path:
+    canon = _norm_objects(objects)
+    ts = time.time()
+    for obj in canon:
+        path = _object_marker_path("lock", target, extension, obj)
+        path.write_text(
+            json.dumps(
+                {
+                    "kind": "storage_lock_receipt",
+                    "target": (target or "work").strip().lower(),
+                    "extension": extension,
+                    "objects": [obj],
+                    "entire": False,
+                    "ts": ts,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    bundle = _gates_root() / f"lock_{_key(target, extension)}.json"
+    prev = _read_gate(bundle) or {}
+    have = set(_norm_objects(list(prev.get("objects") or [])))
+    have.update(canon)
+    merged = sorted(have)
+    entire = bool(prev.get("entire")) and not canon
+    bundle.write_text(
+        json.dumps(
+            {
+                "kind": "storage_lock_receipt",
+                "target": (target or "work").strip().lower(),
+                "extension": extension,
+                "objects": merged,
+                "entire": entire,
+                "ts": ts,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return bundle
+
+
+def _object_covered(kind: str, obj: str, *, target: str, extension: str | None) -> bool:
+    path = _object_marker_path(kind, target, extension, obj)
+    data = _read_gate(path)
+    if data and data.get("kind") in ("storage_aligned", "storage_lock_receipt"):
+        age = time.time() - float(data.get("ts") or 0)
+        if age <= _ttl_sec():
+            return True
+    bundle = _gates_root() / f"{kind}_{_key(target, extension)}.json"
+    data = _read_gate(bundle)
+    if not data:
+        return False
+    age = time.time() - float(data.get("ts") or 0)
+    if age > _ttl_sec():
+        return False
+    return _covers(list(data.get("objects") or []), bool(data.get("entire")), [obj])
+
+
+def objects_covered_by_lock(objects: list[str], *, target: str, extension: str | None) -> bool:
+    needed = _norm_objects(objects)
+    if not needed:
+        bundle = _gates_root() / f"lock_{_key(target, extension)}.json"
+        data = _read_gate(bundle)
+        return bool(data and data.get("entire"))
+    return all(_object_covered("lock", obj, target=target, extension=extension) for obj in needed)
+
+
+def refuse_get_captured(
+    objects: list[str],
+    *,
+    target: str,
+    extension: str | None,
+    confirm_get_captured: bool = False,
+) -> dict[str, Any] | None:
+    if confirm_get_captured:
+        return None
+    captured = [
+        obj
+        for obj in _norm_objects(objects)
+        if _object_covered("lock", obj, target=target, extension=extension)
+    ]
+    if not captured:
+        return None
+    return {
+        "ok": False,
+        "error": (
+            "Refusing storage_get on already-captured objects "
+            f"({', '.join(captured)}). Get pulls last Put and wipes unpublished WORK edits."
+        ),
+        "step": "refuse_get_captured",
+        "capturedObjects": captured,
+        "hint": "Dump from WORK IB instead. confirm_get_captured=true only if user asked to roll back to storage.",
+        "stop": True,
+    }
+
+
+def check_storage_aligned(
+    objects: list[str],
+    *,
+    target: str,
+    extension: str | None,
+    storage_aligned: bool,
+) -> dict[str, Any] | None:
+    """Return error dict if WORK load must refuse; None if OK.
+
+    Already-captured objects do not need a fresh storage_get (incident 5359).
+    """
+    if objects_covered_by_lock(objects, target=target, extension=extension):
+        return None
+    if not storage_aligned:
+        return {
+            "ok": False,
+            "error": "Refusing WORK load without storage_aligned=true.",
+            "step": "storage_get_then_aligned",
+            "hint": (
+                "If already captured: dump from WORK, then load with storage_captured=true "
+                "(no Get). Else storage_get first."
+            ),
+            "stop": True,
+        }
+    needed = _norm_objects(objects)
+    missing = [
+        obj for obj in needed if not _object_covered("aligned", obj, target=target, extension=extension)
+    ]
+    if missing:
+        return {
+            "ok": False,
+            "error": "No storage_aligned marker for all load objects. Run storage_get first (if not captured).",
+            "step": "storage_get_then_aligned",
+            "needed": missing,
+            "stop": True,
+        }
+    return None
+
+
+def check_lock_receipt(
+    objects: list[str],
+    *,
+    target: str,
+    extension: str | None,
+    storage_captured: bool,
+) -> dict[str, Any] | None:
+    if not storage_captured:
+        return {
+            "ok": False,
+            "error": "Refusing load to WORK without storage_captured=true.",
+            "step": "capture_then_approve",
+            "stop": True,
+        }
+    if objects_covered_by_lock(objects, target=target, extension=extension):
+        return None
+    path = _gates_root() / f"lock_{_key(target, extension)}.json"
+    return {
+        "ok": False,
+        "error": "No lock receipt. Run storage_lock (or UI capture then storage_lock) first.",
+        "step": "storage_lock_receipt",
+        "markerPath": str(path),
+        "needed": _norm_objects(objects),
+        "hint": "storage_captured=true alone is not enough; MCP needs a receipt from storage_lock.",
+        "stop": True,
+    }
+
+
+def _object_lock_path(target: str, extension: str | None, obj: str) -> Path:
+    return _gates_root() / f"objectlock_{_key(target, extension)}__{_object_file_key(obj)}.json"
+
+
+def acquire_object_locks(
+    objects: list[str],
+    *,
+    task: str,
+    target: str,
+    extension: str | None,
+    tool: str = "",
+) -> dict[str, Any] | None:
+    if not _is_work(target):
+        return None
+    task_s = (task or "").strip()
+    if not task_s:
+        return require_work_task(task, target=target)
+    now = time.time()
+    ttl = _ttl_sec()
+    held: list[dict[str, Any]] = []
+    for obj in _norm_objects(objects):
+        path = _object_lock_path(target, extension, obj)
+        data = _read_gate(path)
+        if data:
+            other = str(data.get("task") or "").strip()
+            age = now - float(data.get("ts") or 0)
+            stale = age > ttl or not _pid_alive(int(data.get("pid") or 0))
+            if other and other != task_s and not stale:
+                held.append(
+                    {
+                        "object": obj,
+                        "task": other,
+                        "pid": data.get("pid"),
+                        "tool": data.get("tool"),
+                    }
+                )
+                continue
+        path.write_text(
+            json.dumps(
+                {
+                    "kind": "object_lock",
+                    "task": task_s,
+                    "object": obj,
+                    "pid": os.getpid(),
+                    "ts": now,
+                    "tool": tool,
+                    "target": (target or "work").strip().lower(),
+                    "extension": extension,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    if held:
+        return {
+            "ok": False,
+            "error": "Object held by another task. Do not dump/load/get the same module.",
+            "step": "object_held_by_other_task",
+            "held": held,
+            "task": task_s,
+            "hint": "Wait until that agent unlocks, or work on a different object.",
+            "stop": True,
+        }
+    return None
+
+
+def release_object_locks(
+    objects: list[str],
+    *,
+    task: str | None,
+    target: str,
+    extension: str | None,
+) -> None:
+    task_s = (task or "").strip()
+    for obj in _norm_objects(objects):
+        path = _object_lock_path(target, extension, obj)
+        data = _read_gate(path)
+        if not data:
+            continue
+        if task_s and str(data.get("task") or "").strip() not in ("", task_s):
+            continue
+        try:
+            path.unlink()
+        except OSError:
+            pass
+
+
+def clear_lock_receipts(objects: list[str], *, target: str, extension: str | None) -> None:
+    for obj in _norm_objects(objects):
+        path = _object_marker_path("lock", target, extension, obj)
+        try:
+            path.unlink()
+        except OSError:
+            pass
+    bundle = _gates_root() / f"lock_{_key(target, extension)}.json"
+    data = _read_gate(bundle)
+    if not data:
+        return
+    drop = set(_norm_objects(objects))
+    remain = [o for o in _norm_objects(list(data.get("objects") or [])) if o not in drop]
+    if remain:
+        data["objects"] = remain
+        data["entire"] = False
+        bundle.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    else:
+        try:
+            bundle.unlink()
+        except OSError:
+            pass
+
+
+def _git_root(start: Path) -> Path | None:
+    cur = start.resolve()
+    for parent in [cur, *cur.parents]:
+        if (parent / ".git").exists():
+            return parent
+    return None
+
+
+def dirty_paths_vs_git(dest_dir: Path, rel_paths: list[str]) -> list[str]:
+    """Paths under dest_dir that differ from HEAD or are untracked (not dump junk)."""
+    root = _git_root(dest_dir)
+    if root is None:
+        return []
+    dirty: list[str] = []
+    for rel in rel_paths:
+        name = Path(rel).name.lower()
+        if name in _SKIP_DIRTY:
+            continue
+        dest = dest_dir / rel.replace("/", os.sep)
+        if not dest.is_file():
+            continue
+        try:
+            rel_to_root = dest.resolve().relative_to(root)
+        except ValueError:
+            continue
+        posix = str(rel_to_root).replace("\\", "/")
+        try:
+            diff = subprocess.run(
+                ["git", "-C", str(root), "diff", "--name-only", "HEAD", "--", posix],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=30,
+            )
+            untracked = subprocess.run(
+                ["git", "-C", str(root), "ls-files", "--others", "--exclude-standard", "--", posix],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=30,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return []
+        if (diff.stdout or "").strip() or (untracked.stdout or "").strip():
+            dirty.append(posix)
+    return dirty
+
+
+def refuse_dirty_repo(
+    src_dir: Path,
+    dest_dir: Path,
+    *,
+    confirm_overwrite_dirty: bool = False,
+) -> dict[str, Any] | None:
+    if confirm_overwrite_dirty:
+        return None
+    rels: list[str] = []
+    if src_dir.is_dir():
+        for src in src_dir.rglob("*"):
+            if src.is_file():
+                rels.append(str(src.relative_to(src_dir)).replace("\\", "/"))
+    dirty = dirty_paths_vs_git(dest_dir, rels)
+    if not dirty:
+        return None
+    return {
+        "ok": False,
+        "error": "Refusing merge_into_repo over dirty git files (would wipe another agent's work).",
+        "step": "refuse_dirty_repo",
+        "dirtyPaths": dirty,
+        "hint": "Do not set confirm_overwrite_dirty unless the user explicitly asked to overwrite.",
+        "stop": True,
+    }
+
+
+def _designer_lock_path(target: str) -> Path:
+    name = "work_designer.lock" if _is_work(target) else "dev_designer.lock"
+    return _gates_root() / name
+
+
+def acquire_designer_lock(target: str, *, tool: str = "") -> dict[str, Any] | None:
+    if not _is_work(target):
+        return None
+    path = _designer_lock_path(target)
+    wait_sec = _int_env("MCP_DESIGNER_LOCK_WAIT_SEC", 720)
+    ttl_sec = _int_env("MCP_DESIGNER_LOCK_TTL_SEC", 1200)
+    poll = 0.5
+    deadline = time.time() + wait_sec
+    my_pid = os.getpid()
+    while True:
+        data = _read_gate(path)
+        if data:
+            pid = int(data.get("pid") or 0)
+            depth = int(data.get("depth") or 1)
+            age = time.time() - float(data.get("ts") or 0)
+            if pid == my_pid:
+                data["depth"] = depth + 1
+                data["ts"] = time.time()
+                data["tool"] = tool or data.get("tool")
+                path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+                return None
+            stale = (not _pid_alive(pid)) or age > ttl_sec
+            if stale:
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
+                data = None
+        if data is None:
+            try:
+                fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_RDWR)
+                try:
+                    payload = json.dumps(
+                        {
+                            "kind": "designer_lock",
+                            "pid": my_pid,
+                            "ts": time.time(),
+                            "tool": tool,
+                            "depth": 1,
+                            "target": (target or "work").strip().lower(),
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+                    os.write(fd, payload.encode("utf-8"))
+                finally:
+                    os.close(fd)
+                return None
+            except FileExistsError:
+                pass
+        if time.time() >= deadline:
+            holder = _read_gate(path) or {}
+            return {
+                "ok": False,
+                "error": "WORK Configurator busy (designer mutex wait timed out).",
+                "step": "work_designer_busy",
+                "holder": holder,
+                "hint": "Wait; do not taskkill /IM 1cv8.exe. Retry after the other agent finishes.",
+                "stop": True,
+            }
+        time.sleep(poll)
+
+
+def release_designer_lock(target: str) -> None:
+    if not _is_work(target):
+        return
+    path = _designer_lock_path(target)
+    data = _read_gate(path)
+    if not data:
+        return
+    if int(data.get("pid") or 0) != os.getpid():
+        return
+    depth = int(data.get("depth") or 1) - 1
+    if depth > 0:
+        data["depth"] = depth
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        return
+    try:
+        path.unlink()
+    except OSError:
+        pass
+
+
+@contextlib.contextmanager
+def designer_mutex(target: str, *, tool: str = ""):
+    err = acquire_designer_lock(target, tool=tool)
+    if err:
+        raise DesignerBusy(err)
+    try:
+        yield
+    finally:
+        release_designer_lock(target)
+
+
+def log_looks_designer_busy(log_text: str) -> bool:
+    low = (log_text or "").lower()
+    return any(h in low for h in _DESIGNER_BUSY_HINTS)
+
+
+def designer_busy_payload(*, log_text: str, exit_code: int, ib: str | None = None) -> dict[str, Any] | None:
+    empty = not (log_text or "").strip()
+    hinted = log_looks_designer_busy(log_text)
+    live = False
+    if ib:
+        try:
+            from .session import find_ib_processes
+
+            live = any(p.kind == "designer" for p in find_ib_processes(ib))
+        except Exception:
+            live = False
+    if hinted or (empty and exit_code != 0 and live) or (empty and exit_code != 0 and hinted):
+        return {
+            "ok": False,
+            "error": "WORK infobase is already open in Configurator (or Designer busy with empty log).",
+            "step": "work_designer_busy",
+            "hint": "Wait for work_designer.lock; do not taskkill /IM 1cv8.exe.",
+            "stop": True,
+        }
+    if empty and exit_code != 0:
+        return {
+            "ok": False,
+            "error": "Designer failed with empty log (often 'база уже открыта').",
+            "step": "work_designer_busy",
+            "hint": "Wait for the other agent / mutex; do not taskkill /IM 1cv8.exe.",
+            "stop": True,
+        }
+    return None

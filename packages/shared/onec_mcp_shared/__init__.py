@@ -149,9 +149,10 @@ class DesignerResult:
     storage_error: bool = False
     storage_offline: bool = False
     storage_access_error: bool = False
+    designer_busy: bool = False
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        data = {
             "exitCode": self.exit_code,
             "logPath": self.log_path,
             "logTail": self.log_tail,
@@ -166,8 +167,14 @@ class DesignerResult:
             "ok": self.exit_code == 0
             and not self.storage_error
             and not self.storage_offline
-            and not self.storage_access_error,
+            and not self.storage_access_error
+            and not self.designer_busy,
         }
+        if self.designer_busy:
+            data["ok"] = False
+            data["step"] = "work_designer_busy"
+            data["hint"] = "Wait for work_designer.lock; do not taskkill /IM 1cv8.exe."
+        return data
 
 
 def _match_objects_in_log(log_text: str, objects: list[str]) -> list[str]:
@@ -340,6 +347,7 @@ def run_designer(
     (see session.start_ib_session). extension_storage → ONEC_STORAGE_PATH_CFE.
     """
     from onec_mcp_shared.session import storage_cli_args
+    from onec_mcp_shared.work_gates import DesignerBusy, designer_busy_payload, designer_mutex
 
     onec_bin = require_env("ONEC_BIN")
     work = work_dir or Path(tempfile.mkdtemp(prefix="1c-mcp-"))
@@ -364,14 +372,25 @@ def run_designer(
         str(log_path),
         *dump_or_load_args,
     ]
-    proc = subprocess.run(
-        argv,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=timeout_sec,
-    )
+    try:
+        with designer_mutex(target, tool="run_designer"):
+            proc = subprocess.run(
+                argv,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout_sec,
+            )
+    except DesignerBusy as exc:
+        payload = exc.payload
+        return DesignerResult(
+            exit_code=1,
+            log_path=str(log_path),
+            log_tail=str(payload.get("error") or ""),
+            command=redact_cmd(argv),
+            designer_busy=True,
+        )
     log_text = ""
     if log_path.is_file():
         log_text = log_path.read_text(encoding="utf-8", errors="replace")
@@ -392,6 +411,12 @@ def run_designer(
     exit_code = proc.returncode
     if (storage_error or offline or access_err or get_needed) and exit_code == 0:
         exit_code = 1
+    ib = None
+    try:
+        ib = resolve_ib(target)
+    except Exception:
+        ib = None
+    busy = designer_busy_payload(log_text=log_text, exit_code=exit_code, ib=ib)
     return DesignerResult(
         exit_code=exit_code,
         log_path=str(log_path),
@@ -402,6 +427,7 @@ def run_designer(
         storage_error=storage_error or get_needed or access_err,
         storage_offline=offline,
         storage_access_error=access_err,
+        designer_busy=bool(busy),
     )
 
 

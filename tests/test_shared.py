@@ -339,3 +339,93 @@ def test_refuse_parent_object_without_confirm():
     assert r(["Document.Foo.Form.Bar"]) is None
     assert r(["CommonModule.Foo"]) is None
     assert r(["Document.Foo"], confirm_parent_object=True) is None
+
+
+def test_aligned_per_object_does_not_clobber(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from onec_mcp_shared import work_gates as wg
+
+    monkeypatch.setenv("DUMP_TMP_ROOT", str(tmp_path))
+    wg.write_aligned_marker(["CommonModule.A"], target="work", extension="Эстет")
+    wg.write_aligned_marker(["CommonModule.B"], target="work", extension="Эстет")
+    assert wg.check_storage_aligned(["CommonModule.A"], target="work", extension="Эстет", storage_aligned=True) is None
+    assert wg.check_storage_aligned(["CommonModule.B"], target="work", extension="Эстет", storage_aligned=True) is None
+
+
+def test_lock_skips_get_aligned(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from onec_mcp_shared import work_gates as wg
+
+    monkeypatch.setenv("DUMP_TMP_ROOT", str(tmp_path))
+    objs = ["CommonModule.ПроизводствоБезЗаказаЛокализация"]
+    wg.write_lock_receipt(objs, target="work", extension="Эстет")
+    assert wg.check_storage_aligned(objs, target="work", extension="Эстет", storage_aligned=False) is None
+    assert wg.refuse_get_captured(objs, target="work", extension="Эстет") is not None
+    assert wg.refuse_get_captured(objs, target="work", extension="Эстет", confirm_get_captured=True) is None
+
+
+def test_object_lock_other_task(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from onec_mcp_shared import work_gates as wg
+
+    monkeypatch.setenv("DUMP_TMP_ROOT", str(tmp_path))
+    objs = ["CommonModule.Foo"]
+    assert wg.acquire_object_locks(objs, task="5359", target="work", extension="e") is None
+    err = wg.acquire_object_locks(objs, task="5389", target="work", extension="e")
+    assert err is not None
+    assert err["step"] == "object_held_by_other_task"
+    assert wg.acquire_object_locks(objs, task="5359", target="work", extension="e") is None
+    wg.release_object_locks(objs, task="5359", target="work", extension="e")
+    assert wg.acquire_object_locks(objs, task="5389", target="work", extension="e") is None
+
+
+def test_require_work_task():
+    from onec_mcp_shared.work_gates import require_work_task
+
+    assert require_work_task(None, target="work") is not None
+    assert require_work_task("5359", target="work") is None
+    assert require_work_task(None, target="dev") is None
+
+
+def test_designer_mutex_reentrant_and_stale(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from onec_mcp_shared import work_gates as wg
+
+    monkeypatch.setenv("DUMP_TMP_ROOT", str(tmp_path))
+    monkeypatch.setenv("MCP_DESIGNER_LOCK_WAIT_SEC", "2")
+    monkeypatch.setenv("MCP_DESIGNER_LOCK_TTL_SEC", "1")
+    assert wg.acquire_designer_lock("work", tool="t1") is None
+    assert wg.acquire_designer_lock("work", tool="t1") is None
+    wg.release_designer_lock("work")
+    wg.release_designer_lock("work")
+    assert wg.acquire_designer_lock("dev", tool="x") is None
+
+
+def test_cmdline_matches_ib_guillemet_quotes(monkeypatch: pytest.MonkeyPatch):
+    from onec_mcp_shared import session as sess
+
+    mapping = {
+        "ERP КОПИЯ": r"C:\Users\rubinshtein\Documents\InfoBase3",
+        "ERP КОПИЯ запасная": r"C:\Users\rubinshtein\Documents\InfoBase2",
+    }
+    monkeypatch.setattr(sess, "_ibases_v8i_paths", lambda: mapping)
+    cmd = "DESIGNER /IBName «ERP КОПИЯ» /Lru"
+    assert sess._cmdline_matches_ib(cmd, mapping["ERP КОПИЯ"])
+    assert not sess._cmdline_matches_ib(cmd, mapping["ERP КОПИЯ запасная"])
+
+
+def test_designer_busy_payload_empty_log():
+    from onec_mcp_shared.work_gates import designer_busy_payload, log_looks_designer_busy
+
+    assert log_looks_designer_busy("Информационная база уже открыта Конфигуратором")
+    busy = designer_busy_payload(log_text="", exit_code=1, ib=None)
+    assert busy is not None
+    assert busy["step"] == "work_designer_busy"
+
+
+def test_refuse_dirty_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from onec_mcp_shared.work_gates import refuse_dirty_repo
+
+    src = tmp_path / "src"
+    dst = tmp_path / "dst"
+    src.mkdir()
+    dst.mkdir()
+    (src / "a.bsl").write_text("new", encoding="utf-8")
+    (dst / "a.bsl").write_text("old", encoding="utf-8")
+    assert refuse_dirty_repo(src, dst, confirm_overwrite_dirty=True) is None

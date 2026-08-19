@@ -34,10 +34,13 @@ from onec_mcp_shared.config_root import (  # noqa: E402
     write_prepared_marker,
 )
 from onec_mcp_shared.work_gates import (  # noqa: E402
+    DesignerBusy,
+    acquire_object_locks,
     check_lock_receipt,
     check_storage_aligned,
     forms_incomplete_in_source,
     refuse_parent_object_without_confirm,
+    require_work_task,
 )
 
 load_env_files(Path(__file__).with_name(".env"), Path.cwd() / ".env", Path(_ROOT).parent / ".env")
@@ -143,7 +146,7 @@ def prepare_new_main_object(
                 _do_dump,
                 force_close=force_close,
                 reopen=_is_work_target(target),
-                restart_even_on_fail=True,
+                restart_even_on_fail=False,
             )
         else:
             result = _do_dump()
@@ -298,7 +301,7 @@ def restore_configuration_ext(
                 lambda: _dump_cfg(target_dump, target),
                 force_close=force_close,
                 reopen=_is_work_target(target),
-                restart_even_on_fail=True,
+                restart_even_on_fail=False,
             )
         else:
             result_t = _dump_cfg(target_dump, target)
@@ -322,7 +325,7 @@ def restore_configuration_ext(
                 lambda: _dump_cfg(donor_dump, ext_donor),
                 force_close=force_close,
                 reopen=False,
-                restart_even_on_fail=True,
+                restart_even_on_fail=False,
             )
         else:
             result_d = _dump_cfg(donor_dump, ext_donor)
@@ -526,9 +529,10 @@ def load_objects(
     manage_session: bool = False,
     force_close: bool = False,
     reopen_designer: bool | None = None,
-    restart_even_on_fail: bool = True,
+    restart_even_on_fail: bool | None = None,
+    task: str | None = None,
 ) -> str:
-    """Partial load. confirm=true. WORK needs storage_aligned+storage_captured (get/lock receipts)."""
+    """Partial load. confirm=true. WORK: task=, lock receipt; Get not required if already captured."""
     if not confirm:
         return json_result(
             {
@@ -597,6 +601,18 @@ def load_objects(
         )
 
     if _is_work_target(t):
+        task_err = require_work_task(task, target=t)
+        if task_err:
+            return json_result(task_err)
+        held_err = acquire_object_locks(
+            canon,
+            task=task or "",
+            target=t,
+            extension=ext_name_preview,
+            tool="load_objects",
+        )
+        if held_err:
+            return json_result(held_err)
         aligned_err = check_storage_aligned(
             canon,
             target=t,
@@ -634,8 +650,9 @@ def load_objects(
             )
 
     if reopen_designer is None:
-        reopen_designer = _is_work_target(t)
-    # Never pop DEV Configurator for the user
+        reopen_designer = False
+    if restart_even_on_fail is None:
+        restart_even_on_fail = not _is_work_target(t)
     if _is_dev_target(t):
         reopen_designer = False
 
@@ -698,6 +715,8 @@ def load_objects(
             )
         else:
             result = _do_load()
+    except DesignerBusy as exc:
+        return json_result({**exc.payload, "session": session_meta})
     except Exception as exc:  # noqa: BLE001
         return json_result({"ok": False, "error": str(exc), "session": session_meta})
 

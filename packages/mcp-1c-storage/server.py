@@ -10,7 +10,6 @@ sys.path.insert(0, str(_ROOT / "shared"))
 
 from onec_mcp_shared import (  # noqa: E402
     env,
-    is_work_target,
     json_result,
     load_env_files,
     normalize_object_name,
@@ -21,8 +20,14 @@ from onec_mcp_shared import (  # noqa: E402
     write_storage_objects_file,
 )
 from onec_mcp_shared.work_gates import (  # noqa: E402
+    DesignerBusy,
+    acquire_object_locks,
     refuse_entire_without_env,
+    refuse_get_captured,
     refuse_parent_object_without_confirm,
+    release_object_locks,
+    clear_lock_receipts,
+    require_work_task,
     write_aligned_marker,
     write_lock_receipt,
 )
@@ -95,7 +100,7 @@ def _run_storage_op(
 
     t = (target or "work").strip().lower()
     if reopen_designer is None:
-        reopen_designer = is_work_target(t)
+        reopen_designer = False
     if t in ("dev", "develop", "sandbox", "base2"):
         reopen_designer = False
 
@@ -121,6 +126,10 @@ def _run_storage_op(
             )
         else:
             result = _do()
+    except DesignerBusy as exc:
+        payload = dict(exc.payload)
+        payload["session"] = session_meta
+        return payload
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": str(exc), "session": session_meta}
 
@@ -156,6 +165,9 @@ def _run_storage_op(
     elif result.exit_code != 0:
         payload["message"] = "Designer failed. See logTail."
         payload["ok"] = False
+        if result.designer_busy:
+            payload["step"] = "work_designer_busy"
+            payload["hint"] = "Wait for work_designer.lock; do not taskkill /IM 1cv8.exe."
     else:
         payload["ok"] = True
         payload["message"] = "Storage operation finished."
@@ -223,8 +235,10 @@ def storage_get(
     manage_session: bool = True,
     force_close: bool = True,
     reopen_designer: bool | None = None,
+    task: str | None = None,
+    confirm_get_captured: bool = False,
 ) -> str:
-    """Get objects from config storage (UpdateCfg). revised overwrites local on locked — needs confirm_revised."""
+    """Get from storage. Refuses if already captured unless confirm_get_captured. WORK needs task=."""
     if revised and not confirm_revised:
         return json_result(
             {
@@ -247,6 +261,23 @@ def storage_get(
     if err:
         return err
     assert canon is not None
+    ext_name = _extension_name(extension)
+    task_err = require_work_task(task, target=target)
+    if task_err:
+        return json_result(task_err)
+    cap_err = refuse_get_captured(
+        canon,
+        target=target,
+        extension=ext_name,
+        confirm_get_captured=confirm_get_captured,
+    )
+    if cap_err:
+        return json_result(cap_err)
+    lock_err = acquire_object_locks(
+        canon, task=task or "", target=target, extension=ext_name, tool="storage_get"
+    )
+    if lock_err:
+        return json_result(lock_err)
 
     work = Path(env("DUMP_TMP_ROOT", str(Path.cwd() / ".tmp" / "1c-storage"))) / now_stamp()
     work.mkdir(parents=True, exist_ok=True)
@@ -289,8 +320,9 @@ def storage_lock(
     manage_session: bool = True,
     force_close: bool = True,
     reopen_designer: bool | None = None,
+    task: str | None = None,
 ) -> str:
-    """Capture (lock) objects in config storage."""
+    """Capture (lock) objects in config storage. WORK needs task=."""
     if revised and not confirm_revised:
         return json_result(
             {
@@ -311,6 +343,15 @@ def storage_lock(
         )
         if parent_err:
             return json_result(parent_err)
+    ext_name = _extension_name(extension)
+    task_err = require_work_task(task, target=target)
+    if task_err:
+        return json_result(task_err)
+    lock_err = acquire_object_locks(
+        canon, task=task or "", target=target, extension=ext_name, tool="storage_lock"
+    )
+    if lock_err:
+        return json_result(lock_err)
 
     work = Path(env("DUMP_TMP_ROOT", str(Path.cwd() / ".tmp" / "1c-storage"))) / now_stamp()
     work.mkdir(parents=True, exist_ok=True)
@@ -321,7 +362,6 @@ def storage_lock(
         list_file = work / "objects.txt"
         write_storage_objects_file(canon, list_file)
         args.extend(["-Objects", str(list_file)])
-    ext_name = _extension_name(extension)
     if ext_name:
         args.extend(["-Extension", ext_name])
 
@@ -350,6 +390,7 @@ def storage_unlock(
     manage_session: bool = True,
     force_close: bool = True,
     reopen_designer: bool | None = None,
+    task: str | None = None,
 ) -> str:
     """Release capture. force discards local changes — needs confirm_force."""
     if force and not confirm_force:
@@ -380,18 +421,20 @@ def storage_unlock(
     if ext_name:
         args.extend(["-Extension", ext_name])
 
-    return json_result(
-        _run_storage_op(
-            args,
-            objects=canon,
-            target=target,
-            manage_session=manage_session,
-            force_close=force_close,
-            reopen_designer=reopen_designer,
-            work=work,
-            extension_storage=bool(ext_name),
-        )
+    payload = _run_storage_op(
+        args,
+        objects=canon,
+        target=target,
+        manage_session=manage_session,
+        force_close=force_close,
+        reopen_designer=reopen_designer,
+        work=work,
+        extension_storage=bool(ext_name),
     )
+    if payload.get("ok"):
+        release_object_locks(canon, task=task, target=target, extension=ext_name)
+        clear_lock_receipts(canon, target=target, extension=ext_name)
+    return json_result(payload)
 
 
 @mcp.tool(name="storage_commit")

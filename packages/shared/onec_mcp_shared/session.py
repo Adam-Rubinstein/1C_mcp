@@ -74,6 +74,18 @@ def ib_name_for_path(ib_path: str | Path) -> str | None:
     return None
 
 
+def _strip_cmd_quotes(cmd: str) -> str:
+    return (
+        (cmd or "")
+        .replace('"', "")
+        .replace("'", "")
+        .replace("«", "")
+        .replace("»", "")
+        .replace("\u00ab", "")
+        .replace("\u00bb", "")
+    )
+
+
 def _cmdline_matches_ib(cmdline: str, ib_path: str | Path) -> bool:
     """
     Match process to IB strictly.
@@ -86,10 +98,11 @@ def _cmdline_matches_ib(cmdline: str, ib_path: str | Path) -> bool:
     """
     needle = _norm(ib_path)
     cmd = cmdline or ""
-    cmd_n = _norm(cmd.replace('"', ""))
+    cmd_unquoted = _strip_cmd_quotes(cmd)
+    cmd_n = _norm(cmd_unquoted)
     if _path_token_in_cmdline(cmd_n, needle):
         return True
-    m = re.search(r'/IBName\s*"?([^"]+)"?', cmd, flags=re.IGNORECASE)
+    m = re.search(r"/IBName\s+(.+?)(?=\s+/|$)", cmd_unquoted, flags=re.IGNORECASE)
     if m:
         name = m.group(1).strip()
         mapping = _ibases_v8i_paths()
@@ -152,9 +165,70 @@ def find_ib_processes(ib_path: str | Path) -> list[IbProcess]:
     return found
 
 
+def _iter_named_processes(names: tuple[str, ...]) -> list[tuple[int, str]]:
+    want = {n.lower() for n in names}
+    out: list[tuple[int, str]] = []
+    try:
+        import win32com.client  # type: ignore
+
+        wmi = win32com.client.GetObject("winmgmts:")
+        for proc in wmi.InstancesOf("Win32_Process"):
+            name = (proc.Name or "").lower()
+            if name not in want:
+                continue
+            out.append((int(proc.ProcessId), proc.CommandLine or ""))
+        return out
+    except Exception:
+        pass
+    try:
+        filt = " OR ".join(f"Name='{n}'" for n in names)
+        ps = subprocess.check_output(
+            [
+                "powershell",
+                "-NoProfile",
+                "-Command",
+                f"Get-CimInstance Win32_Process -Filter \"{filt}\" "
+                "| ForEach-Object { $_.ProcessId.ToString() + '|' + $_.CommandLine }",
+            ],
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        for line in ps.splitlines():
+            if "|" not in line:
+                continue
+            pid_s, cmd = line.split("|", 1)
+            out.append((int(pid_s.strip()), cmd.strip()))
+    except Exception:
+        pass
+    return out
+
+
+def kill_dbgs_orphans(owner_pids: list[int]) -> list[dict[str, Any]]:
+    """Kill dbgs.exe whose --ownerPID is a Designer we just closed. Never 1cv8.exe by image name."""
+    report: list[dict[str, Any]] = []
+    if not owner_pids:
+        return report
+    owners = {int(p) for p in owner_pids if int(p) > 0}
+    for pid, cmd in _iter_named_processes(("dbgs.exe",)):
+        m = re.search(r"--ownerPID[=:\s]+(\d+)", cmd or "", flags=re.IGNORECASE)
+        if not m:
+            continue
+        owner = int(m.group(1))
+        if owner not in owners:
+            continue
+        try:
+            subprocess.run(["taskkill", "/PID", str(pid), "/F"], capture_output=True, check=False)
+            report.append({"pid": pid, "kind": "dbgs", "ownerPID": owner, "closed": True})
+        except Exception as exc:  # noqa: BLE001
+            report.append({"pid": pid, "kind": "dbgs", "ownerPID": owner, "closed": False, "error": str(exc)})
+    return report
+
+
 def close_ib_sessions(ib_path: str | Path, *, force: bool = False, timeout_sec: float = 30.0) -> list[dict[str, Any]]:
     procs = find_ib_processes(ib_path)
     report: list[dict[str, Any]] = []
+    designer_pids = [p.pid for p in procs if p.kind == "designer"]
     for p in procs:
         try:
             args = ["taskkill", "/PID", str(p.pid)]
@@ -164,13 +238,18 @@ def close_ib_sessions(ib_path: str | Path, *, force: bool = False, timeout_sec: 
             report.append({"pid": p.pid, "kind": p.kind, "closed": True})
         except Exception as exc:  # noqa: BLE001
             report.append({"pid": p.pid, "kind": p.kind, "closed": False, "error": str(exc)})
+    if designer_pids:
+        report.extend(kill_dbgs_orphans(designer_pids))
     deadline = time.time() + timeout_sec
     while time.time() < deadline and find_ib_processes(ib_path):
         time.sleep(0.5)
     still = find_ib_processes(ib_path)
     if still and force:
+        still_designers = [p.pid for p in still if p.kind == "designer"]
         for p in still:
             subprocess.run(["taskkill", "/PID", str(p.pid), "/F"], capture_output=True, check=False)
+        if still_designers:
+            report.extend(kill_dbgs_orphans(still_designers))
     return report
 
 
@@ -289,7 +368,7 @@ def with_managed_session(
     *,
     force_close: bool = False,
     reopen: bool = False,
-    restart_even_on_fail: bool = True,
+    restart_even_on_fail: bool = False,
     attach_storage: bool | None = None,
 ) -> tuple[T | None, dict[str, Any]]:
     """
@@ -298,8 +377,46 @@ def with_managed_session(
     Reopen uses /IBName + WORK user (starter-like) so IB-bound configuration
     repository comes back — **without** CLI /ConfigurationRepository* re-auth.
     Explicit ONEC_STORAGE_* attach is only for headless /F batch inside fn.
+    WORK: restart_even_on_fail default False (do not pop Configurator after fail).
     """
+    from onec_mcp_shared.work_gates import DesignerBusy, designer_mutex
+
     meta: dict[str, Any] = {"ib": str(ib_path), "reopen": reopen}
+    work = (env("ONEC_IB_WORK") or "").strip()
+    target_guess = "dev"
+    if work:
+        try:
+            if Path(ib_path).resolve() == Path(work).resolve():
+                target_guess = "work"
+        except OSError:
+            if os.path.normcase(os.path.normpath(str(ib_path))) == os.path.normcase(os.path.normpath(work)):
+                target_guess = "work"
+    try:
+        with designer_mutex(target_guess, tool="with_managed_session"):
+            return _with_managed_session_body(
+                ib_path,
+                fn,
+                force_close=force_close,
+                reopen=reopen,
+                restart_even_on_fail=restart_even_on_fail,
+                attach_storage=attach_storage,
+                meta=meta,
+            )
+    except DesignerBusy as exc:
+        meta.update(exc.payload)
+        raise
+
+
+def _with_managed_session_body(
+    ib_path: str | Path,
+    fn: Callable[[], T],
+    *,
+    force_close: bool,
+    reopen: bool,
+    restart_even_on_fail: bool,
+    attach_storage: bool | None,
+    meta: dict[str, Any],
+) -> tuple[T | None, dict[str, Any]]:
     before = find_ib_processes(ib_path)
     modes = sorted({p.kind for p in before if p.kind in ("designer", "enterprise")})
     meta["hadModes"] = modes

@@ -20,7 +20,13 @@ from onec_mcp_shared import (  # noqa: E402
     run_designer,
     write_list_file,
 )
-from onec_mcp_shared.work_gates import forms_incomplete_after_dump  # noqa: E402
+from onec_mcp_shared.work_gates import (  # noqa: E402
+    DesignerBusy,
+    acquire_object_locks,
+    forms_incomplete_after_dump,
+    refuse_dirty_repo,
+    require_work_task,
+)
 from onec_mcp_shared.server_run import make_mcp, run_mcp  # noqa: E402
 from onec_mcp_shared.session import with_managed_session  # noqa: E402
 
@@ -66,17 +72,15 @@ def dump_objects(
     extension: str | bool | None = None,
     merge_into_repo: bool = True,
     confirm_merge_dev: bool = False,
+    confirm_overwrite_dirty: bool = False,
     force_full: bool = False,
     target: str = "dev",
     manage_session: bool = False,
     force_close: bool = False,
     reopen_designer: bool | None = None,
+    task: str | None = None,
 ) -> str:
-    """
-    Partial dump via Designer -listFile.
-    target: 'dev' (sandbox) or 'work' (daily Configurator IB).
-    merge_into_repo on DEV requires confirm_merge_dev=true (refuses silent wipe of repo).
-    """
+    """Partial dump via Designer -listFile. WORK merge needs task= and refuses dirty git."""
     if force_full and not objects:
         return json_result({"ok": False, "error": "Full dump into repo is disabled. Pass objects."})
     if not objects:
@@ -99,9 +103,30 @@ def dump_objects(
             }
         )
     if reopen_designer is None:
-        reopen_designer = t in ("work", "prod", "base3")
+        reopen_designer = False
     if t in ("dev", "develop", "sandbox", "base2"):
         reopen_designer = False
+
+    ext_name_preview = None
+    if extension is True:
+        ext_name_preview = env("ONEC_EXTENSION")
+    elif isinstance(extension, str) and extension:
+        ext_name_preview = extension
+
+    canon = [normalize_object_name(o) for o in objects]
+    if merge_into_repo and is_work_target(t):
+        task_err = require_work_task(task, target=t)
+        if task_err:
+            return json_result(task_err)
+        lock_err = acquire_object_locks(
+            canon,
+            task=task or "",
+            target=t,
+            extension=ext_name_preview,
+            tool="dump_objects",
+        )
+        if lock_err:
+            return json_result(lock_err)
 
     if is_work_target(t):
         try:
@@ -123,7 +148,6 @@ def dump_objects(
     dump_dir = Path(target_dir) if target_dir else _tmp_root() / now_stamp()
     dump_dir.mkdir(parents=True, exist_ok=True)
     list_file = dump_dir / "objects.txt"
-    canon = [normalize_object_name(o) for o in objects]
     write_list_file(canon, list_file)
 
     args = ["/DumpConfigToFiles", str(dump_dir)]
@@ -160,6 +184,8 @@ def dump_objects(
             )
         else:
             result = _do_dump()
+    except DesignerBusy as exc:
+        return json_result({**exc.payload, "session": session_meta})
     except Exception as exc:  # noqa: BLE001
         return json_result({"ok": False, "error": str(exc), "session": session_meta})
 
@@ -234,6 +260,12 @@ def dump_objects(
         if not repo:
             payload["mergeError"] = "REPO_CF / REPO_CFE not set"
         else:
+            dirty_err = refuse_dirty_repo(
+                dump_dir, Path(repo), confirm_overwrite_dirty=confirm_overwrite_dirty
+            )
+            if dirty_err:
+                payload.update(dirty_err)
+                return json_result(payload)
             report = merge_copy(dump_dir, Path(repo))
             junk = Path(repo) / "objects.txt"
             if junk.is_file():
