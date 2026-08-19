@@ -40,6 +40,7 @@ from onec_mcp_shared.work_gates import (  # noqa: E402
     check_storage_aligned,
     forms_incomplete_in_source,
     refuse_parent_object_without_confirm,
+    release_object_locks,
     require_work_task,
 )
 
@@ -756,6 +757,13 @@ def load_objects(
             payload["warning"] = (
                 "WORK load done with storage attached. "
                 "Do not storage_commit unless user explicitly asked; compare first."
+            )
+            # Free object queue so the next task can dump from WORK and continue.
+            release_object_locks(
+                canon,
+                task=task,
+                target=t,
+                extension=ext_name,
             )
     if session_meta and session_meta.get("userAction"):
         payload["userAction"] = session_meta["userAction"]

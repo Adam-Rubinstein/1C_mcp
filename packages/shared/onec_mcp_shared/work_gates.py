@@ -617,6 +617,26 @@ def _object_lock_path(target: str, extension: str | None, obj: str) -> Path:
     return _gates_root() / f"objectlock_{_key(target, extension)}__{_object_file_key(obj)}.json"
 
 
+def _object_lock_wait_sec() -> int:
+    return _int_env("MCP_OBJECT_LOCK_WAIT_SEC", 3600)
+
+
+def _object_lock_ttl_sec() -> int:
+    return _int_env("MCP_OBJECT_LOCK_TTL_SEC", 1800)
+
+
+def _object_lock_stale(data: dict[str, Any], *, now: float, ttl: int) -> bool:
+    age = now - float(data.get("ts") or 0)
+    if age > ttl:
+        return True
+    pid = int(data.get("pid") or 0)
+    # Dead holder process → stale. Do NOT treat pid==self as ownership:
+    # dump/load/storage share one stdio process across Cursor chats.
+    if pid > 0 and not _pid_alive(pid):
+        return True
+    return False
+
+
 def acquire_object_locks(
     objects: list[str],
     *,
@@ -625,58 +645,81 @@ def acquire_object_locks(
     extension: str | None,
     tool: str = "",
 ) -> dict[str, Any] | None:
+    """Queue per object: same task re-enters; other task waits (not refuse immediately)."""
     if not _is_work(target):
         return None
     task_s = (task or "").strip()
     if not task_s:
         return require_work_task(task, target=target)
-    now = time.time()
-    ttl = _ttl_sec()
-    held: list[dict[str, Any]] = []
+    wait_sec = _object_lock_wait_sec()
+    ttl = _object_lock_ttl_sec()
+    poll = 0.5
+    my_pid = os.getpid()
     for obj in _norm_objects(objects):
         path = _object_lock_path(target, extension, obj)
-        data = _read_gate(path)
-        if data:
-            other = str(data.get("task") or "").strip()
-            age = now - float(data.get("ts") or 0)
-            stale = age > ttl or not _pid_alive(int(data.get("pid") or 0))
-            if other and other != task_s and not stale:
-                held.append(
+        deadline = time.time() + wait_sec
+        while True:
+            now = time.time()
+            data = _read_gate(path)
+            if data:
+                other = str(data.get("task") or "").strip()
+                if other == task_s:
+                    data["ts"] = now
+                    data["pid"] = my_pid
+                    data["tool"] = tool or data.get("tool")
+                    path.write_text(
+                        json.dumps(data, ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
+                    break
+                if not _object_lock_stale(data, now=now, ttl=ttl):
+                    if now >= deadline:
+                        return {
+                            "ok": False,
+                            "error": (
+                                "Object held by another task "
+                                f"(wait timed out after {wait_sec}s)."
+                            ),
+                            "step": "object_held_by_other_task",
+                            "held": [
+                                {
+                                    "object": obj,
+                                    "task": other,
+                                    "pid": data.get("pid"),
+                                    "tool": data.get("tool"),
+                                }
+                            ],
+                            "task": task_s,
+                            "hint": (
+                                "Wait for the other agent to finish load (releases object lock), "
+                                "or increase MCP_OBJECT_LOCK_WAIT_SEC. Then dump from WORK IB."
+                            ),
+                            "stop": True,
+                        }
+                    time.sleep(poll)
+                    continue
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
+            path.write_text(
+                json.dumps(
                     {
+                        "kind": "object_lock",
+                        "task": task_s,
                         "object": obj,
-                        "task": other,
-                        "pid": data.get("pid"),
-                        "tool": data.get("tool"),
-                    }
-                )
-                continue
-        path.write_text(
-            json.dumps(
-                {
-                    "kind": "object_lock",
-                    "task": task_s,
-                    "object": obj,
-                    "pid": os.getpid(),
-                    "ts": now,
-                    "tool": tool,
-                    "target": (target or "work").strip().lower(),
-                    "extension": extension,
-                },
-                ensure_ascii=False,
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
-    if held:
-        return {
-            "ok": False,
-            "error": "Object held by another task. Do not dump/load/get the same module.",
-            "step": "object_held_by_other_task",
-            "held": held,
-            "task": task_s,
-            "hint": "Wait until that agent unlocks, or work on a different object.",
-            "stop": True,
-        }
+                        "pid": my_pid,
+                        "ts": now,
+                        "tool": tool,
+                        "target": (target or "work").strip().lower(),
+                        "extension": extension,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            break
     return None
 
 

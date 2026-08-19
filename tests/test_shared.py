@@ -362,19 +362,48 @@ def test_lock_skips_get_aligned(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     assert wg.refuse_get_captured(objs, target="work", extension="Эстет", confirm_get_captured=True) is None
 
 
-def test_object_lock_other_task(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_object_lock_queues_then_acquires(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    import threading
+    import time
+
+    from onec_mcp_shared import work_gates as wg
+
+    monkeypatch.setenv("DUMP_TMP_ROOT", str(tmp_path))
+    monkeypatch.setenv("MCP_OBJECT_LOCK_WAIT_SEC", "5")
+    monkeypatch.setenv("MCP_OBJECT_LOCK_TTL_SEC", "1800")
+    objs = ["CommonModule.Foo"]
+    assert wg.acquire_object_locks(objs, task="5359", target="work", extension="e") is None
+
+    def _release_later():
+        time.sleep(0.4)
+        wg.release_object_locks(objs, task="5359", target="work", extension="e")
+
+    threading.Thread(target=_release_later, daemon=True).start()
+    assert wg.acquire_object_locks(objs, task="5389", target="work", extension="e") is None
+    wg.release_object_locks(objs, task="5389", target="work", extension="e")
+
+
+def test_object_lock_same_task_reenters(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from onec_mcp_shared import work_gates as wg
 
     monkeypatch.setenv("DUMP_TMP_ROOT", str(tmp_path))
     objs = ["CommonModule.Foo"]
     assert wg.acquire_object_locks(objs, task="5359", target="work", extension="e") is None
+    assert wg.acquire_object_locks(objs, task="5359", target="work", extension="e") is None
+
+
+def test_object_lock_timeout_still_held(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from onec_mcp_shared import work_gates as wg
+
+    monkeypatch.setenv("DUMP_TMP_ROOT", str(tmp_path))
+    monkeypatch.setenv("MCP_OBJECT_LOCK_WAIT_SEC", "1")
+    monkeypatch.setenv("MCP_OBJECT_LOCK_TTL_SEC", "1800")
+    objs = ["CommonModule.Foo"]
+    assert wg.acquire_object_locks(objs, task="5359", target="work", extension="e") is None
     err = wg.acquire_object_locks(objs, task="5389", target="work", extension="e")
     assert err is not None
     assert err["step"] == "object_held_by_other_task"
-    assert wg.acquire_object_locks(objs, task="5359", target="work", extension="e") is None
     wg.release_object_locks(objs, task="5359", target="work", extension="e")
-    assert wg.acquire_object_locks(objs, task="5389", target="work", extension="e") is None
-
 
 def test_require_work_task():
     from onec_mcp_shared.work_gates import require_work_task
