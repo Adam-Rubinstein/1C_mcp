@@ -36,7 +36,7 @@
       "args": ["-u", "C:/Tools/1C_mcp/scripts/run_server.py", "load"],
       "env": {
         "MCP_TRANSPORT": "stdio",
-        "MCP_LOAD_REV": "11-work-gates-1286",
+        "MCP_LOAD_REV": "20-require-manage-session",
         "PYTHONUNBUFFERED": "1",
         "ONEC_BIN": "C:/Program Files/1cv8/8.3.27.1719/bin/1cv8.exe",
         "ONEC_IB_DEV": "C:/path/to/InfoBase_DEV",
@@ -62,7 +62,7 @@
       "args": ["-u", "C:/Tools/1C_mcp/scripts/run_server.py", "storage"],
       "env": {
         "MCP_TRANSPORT": "stdio",
-        "MCP_STORAGE_REV": "5-aligned-lock-receipt",
+        "MCP_STORAGE_REV": "10-session-ibname-cfl",
         "PYTHONUNBUFFERED": "1",
         "ONEC_BIN": "C:/Program Files/1cv8/8.3.27.1719/bin/1cv8.exe",
         "ONEC_IB_WORK": "C:/path/to/InfoBase_WORK",
@@ -82,7 +82,7 @@
       "args": ["C:/Tools/1C_mcp/scripts/run_server.py", "com"],
       "env": {
         "MCP_TRANSPORT": "stdio",
-        "MCP_COM_REV": "3-com-session-close",
+        "MCP_COM_REV": "4-com-atexit-close",
         "ONEC_PLATFORM_PATH": "C:/Program Files/1cv8/8.3.27.1719",
         "ONEC_IB_DEV": "C:/path/to/InfoBase_DEV",
         "ONEC_IB_WORK": "C:/path/to/InfoBase_WORK",

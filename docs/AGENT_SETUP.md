@@ -2,6 +2,9 @@
 
 Use this checklist when a user wants MCP servers for 1C development. **Ask only what is missing.** Write secrets to **gitignored** paths (`.local/`, user `.env`, Cursor `mcp.json` on the machine). Never commit passwords, tokens, or IB paths that identify private infrastructure unless the user explicitly wants them in a private repo.
 
+**What each server does:** [MCP_SERVERS.md](MCP_SERVERS.md).  
+**Project template first-run:** scaffold folder `Project` (`.cursor/.setup-pending` + `00-first-run-setup.mdc`) fills `.cursor/mcp.json` from [mcp.json.example](../mcp.json.example).
+
 ## Checklist questions
 
 1. **Platform install path** — directory like `C:/Program Files/1cv8/8.3.27.1719` (`ONEC_PLATFORM_PATH`, `ONEC_BIN=…/bin/1cv8.exe`).

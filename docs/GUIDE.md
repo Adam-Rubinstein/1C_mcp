@@ -1,20 +1,24 @@
 # Operator guide — 1C MCP Toolkit
 
+**Server catalog (what each MCP does):** [MCP_SERVERS.md](MCP_SERVERS.md).  
+**Workstation setup:** [AGENT_SETUP.md](AGENT_SETUP.md).  
+**Cursor project template:** copy [mcp.json.example](../mcp.json.example); portable rules live in the Project scaffold (`Desktop/Project`).
+
 ## Architecture
 
 ```
 Cursor / Agent
     │  stdio (local) or HTTP SSE + Bearer (remote)
     ▼
-┌─────────────┐  ┌──────┐  ┌──────┐  ┌─────┐  ┌───────┐
-│ platform JAR│  │ dump │  │ load │  │ com │  │ files │ …
-└──────┬──────┘  └──┬───┘  └──┬───┘  └──┬──┘  └───┬───┘
-       │            │         │         │          │
-       ▼            ▼         ▼         ▼          ▼
-  1cv8 HBK/help   DESIGNER  DESIGNER   COM      XML/BSL dump on disk
+┌──────────┐  ┌──────┐  ┌──────┐  ┌─────────┐  ┌─────┐  ┌───────┐
+│ platform │  │ dump │  │ load │  │ storage │  │ com │  │ files │ …
+└────┬─────┘  └──┬───┘  └──┬───┘  └────┬────┘  └──┬──┘  └───┬───┘
+     │           │         │           │          │         │
+     ▼           ▼         ▼           ▼          ▼         ▼
+  help/HBK    DESIGNER  DESIGNER   repository   COM     XML/BSL on disk
 ```
 
-Python packages share `onec_mcp_shared` (env, Designer runner, listFile BOM, storage-error parsing, merge-copy).
+Python packages share `onec_mcp_shared` (env, Designer runner, listFile BOM, storage-error parsing, merge-copy, session/IBName matching).
 
 ## Environment variables
 
@@ -74,7 +78,10 @@ Agents must show that list and stop — never pretend success.
 ### Session management (`manage_session`)
 
 - Closes **only** the IB from `target` (strict `/F` path or exact `/IBName` from `ibases.v8i`).
-- `reopen_designer`: auto **True on work**, **False on dev**. Work reopen: `DESIGNER /IBName` + IB title (two argv) + IB user — not bare `/F`, not `/AppAutoCheckMode`, not one argv `/IBName"…"`.
+- Also matches cmdline forms like `/IBName"Title"` (thin client / Designer variants).
+- After `force_close`, clears **stale** file-IB `.cfl` lock files when the IB process is gone.
+- WORK `load_objects`: MCP requires / auto-enables `manage_session` + `force_close` (`require_manage_session` if missing).
+- `reopen_designer`: default **False between** get/dump/lock/load; on the **last** successful WORK step after the agent closed Designer → **True**. Work reopen: `DESIGNER /IBName` + IB title (two argv) + IB user — not bare `/F`, not `/AppAutoCheckMode`, not one argv `/IBName"…"`. Do **not** re-pass `/ConfigurationRepository*` on interactive reopen (double auth → fail).
 - Optional explicit storage CLI: set `ONEC_STORAGE_PATH` / `ONEC_STORAGE_USER` / `ONEC_STORAGE_PASSWORD`.
 - Never default-open Designer when no session was open on that IB; never reopen DEV for the user.
 - **Adopted UUID gate:** before prepare/load, `ExtendedConfigurationObject` in `REPO_CFE` must equal Attribute `uuid` in `REPO_CF` for the same attribute name. On mismatch → `ok=false`, step `fix_adopted_uuids`. New Adopted attrs require loading the **main** CF object, not only the extension.
@@ -110,12 +117,14 @@ COM unload of event log to a temp XML; best-effort parse. Needs privileges.
 
 HTTP client toward `DEBUG_SERVER_URL` (platform `dbgs` / community debug MCP shapes). Live attach needs a running debug server — see [PavRedAlex/1c-debug-mcp](https://github.com/PavRedAlex/1c-debug-mcp).
 
-## Deploy on Windows host (adam)
+## Deploy on Windows host (optional remote SSE)
+
+Only if the team runs a shared MCP host (not required for local stdio).
 
 1. Clone repo to e.g. `C:\Tools\1C_mcp`.
 2. `python -m venv .venv` && `pip install -r requirements.txt`.
 3. Create `C:\Tools\1C_mcp\.env` from `.env.example` (IB paths, `MCP_TOKEN`).
-4. Run `scripts\deploy\install_services.ps1` **or** start each server in a scheduled task / NSSM:
+4. Run `scripts\deploy\install_services.ps1` **or** `scripts\deploy\start_all.ps1` **or** start each server in a scheduled task / NSSM:
 
 ```powershell
 $env:MCP_TRANSPORT = "sse"
@@ -124,8 +133,9 @@ $env:MCP_PORT = "8761"
 .\.venv\Scripts\python.exe scripts\run_server.py dump
 ```
 
-5. Open firewall for ports you expose (or bind to VPN IP only).
+5. Open firewall for ports you expose (or bind to VPN / private IP only).
 6. Point Cursor `url` + `Authorization: Bearer …` — token only on client PC and server disk.
+7. After git push of toolkit fixes: on the host `git pull --ff-only`, restart SSE processes, confirm `git rev-parse HEAD` matches.
 
 ## Smoke tests (no IB)
 
