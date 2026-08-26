@@ -90,7 +90,8 @@ MCP **refuses** soft honor-system alone. Chain:
 | WORK load without get marker / without lock receipt | Honor-system `storage_captured` alone was abused (1286) |
 | `merge_into_repo` from DEV without `confirm_merge_dev` | Stale DEV overwrites live repo |
 | Form dump without Form.xml | Incomplete Designer dump |
-| com/journal against WORK IB path | Accidental live IB COM |
+| Leftover `1c-com` session (exclusive lock in Designer) | Tool without `with session()` / no `close` |
+| com/journal against WORK without intent | Accidental live IB COM (journal stays DEV; `1c-com` defaults WORK) |
 | `entire_config` storage without `ALLOW_ENTIRE_STORAGE_OPS=1` | Whole-config lock/get |
 | Empty `ConfigurationRepositoryP` flag | Some Designers treat empty `/P` as auth fail — omit flag when password empty |
 

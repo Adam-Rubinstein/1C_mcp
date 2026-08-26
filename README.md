@@ -25,7 +25,7 @@ MCP (Model Context Protocol) — способ подключить к ИИ-ре�
 | **1c-dump** | Частичная / инкрементальная выгрузка конфигурации из ИБ в файлы |
 | **1c-load** | Частичная загрузка в ИБ: `load_prepare_work`, `prepare_new_main_object`, `restore_configuration_ext`, `load_objects` (`confirm=true`), `load_health` |
 | **1c-storage** | Хранилище конфигурации: `storage_get`, `storage_lock`, `storage_unlock`, `storage_commit` (`confirm`), `storage_report` |
-| **1c-com** | Данные ИБ через COM: запросы, `com_get` / `com_write` / `com_post` (по умолчанию WORK) |
+| **1c-com** | Данные ИБ через COM: `com_get` / `com_write` / `com_post` (WORK). Сессия закрывается после каждого tool |
 | **1c-files** | Поиск и чтение по каталогам выгрузки (`REPO_CF` / `REPO_CFE`) |
 | **1c-review** | Чеклист по BSL (паттерны из YAML) |
 | **1c-journal** | Журнал регистрации через COM (best effort) |
