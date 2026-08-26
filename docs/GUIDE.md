@@ -92,7 +92,7 @@ Agents must show that list and stop — never pretend success.
 
 ## COM
 
-Windows only (`pywin32`). Connection string from `ONEC_IB` or server/ref. Tools: `com_ping`, `com_query`, `com_metadata_find`. Prefer read-only queries.
+Windows. Connect via **comtypes** + `IV8COMConnector3` (win32com `Connect` is broken on 8.3.27 — `TYPE_E_LIBNOTREGISTERED`). Default IB is **WORK** (`ONEC_IB_WORK` + `ONEC_USER_WORK`). `target=dev` for the sandbox. Tools: `com_ping`, `com_query`, `com_get`, `com_write`, `com_post`, `com_unpost`, `com_metadata_find`. Write/post require `confirm=true`. Journal COM stays DEV-only.
 
 ## Files
 

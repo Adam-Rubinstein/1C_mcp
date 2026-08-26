@@ -61,7 +61,7 @@ Paths under `.local/` must remain gitignored.
 - [ ] `dump_status` sees `ONEC_BIN` + IB (live dump only when IB available)
 - [ ] `load_health` ok; `load_objects` without `confirm` returns error
 - [ ] Storage error path returns `objectsToCapture` (when reproducible)
-- [ ] Cursor GetMcpTools for `1c-load` lists **`load_health`, `load_prepare_work`, `load_objects`** (UI «3 tools»; `mcp_auth` not counted)
+- [ ] Cursor GetMcpTools for `1c-com` lists `com_get`, `com_write`, `com_post` (bump `MCP_COM_REV`)
 
 ## Cursor catalog (tool count mismatch)
 
@@ -98,7 +98,7 @@ MCP **refuses** soft honor-system alone. Chain:
 
 Optional env: `MCP_STAGING_SECRET`, `MCP_GATE_TTL_SEC`, `ALLOW_ENTIRE_STORAGE_OPS`, `ONEC_DEBUG_DENY_WORK`.
 
-Bump `MCP_LOAD_REV` / `MCP_STORAGE_REV` after toolkit update so Cursor reloads tool schemas.
+Bump `MCP_LOAD_REV` / `MCP_STORAGE_REV` / `MCP_COM_REV` after toolkit update so Cursor reloads tool schemas.
 
 ## Estet example (illustrative only)
 
