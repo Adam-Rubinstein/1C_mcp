@@ -10,6 +10,7 @@ block Configurator exclusive lock on a file IB.
 
 from __future__ import annotations
 
+import atexit
 import contextlib
 import ctypes
 import gc
@@ -17,6 +18,10 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from onec_mcp_shared import env, is_work_target, resolve_ib, resolve_ib_auth
+
+# Live COM apps in this process (session() + atexit if the MCP process dies).
+_OPEN: list[tuple[Any, Any]] = []
+_ATEXIT_DONE = False
 
 
 def _patch_dynamic_dispatch() -> None:
@@ -96,9 +101,27 @@ def _release_dispatch(obj: Any) -> None:
 
 def close(conn: Any, connector: Any = None) -> None:
     """Drop V83 application so the IB COM session ends."""
+    pair = (conn, connector)
+    try:
+        _OPEN.remove(pair)
+    except ValueError:
+        pass
     _release_dispatch(conn)
     _release_dispatch(connector)
     gc.collect()
+
+
+def _close_all() -> None:
+    for conn, connector in list(_OPEN):
+        close(conn, connector)
+
+
+def _ensure_atexit() -> None:
+    global _ATEXIT_DONE
+    if _ATEXIT_DONE:
+        return
+    atexit.register(_close_all)
+    _ATEXIT_DONE = True
 
 
 def connect(*, target: str = "work") -> tuple[Any, Any]:
@@ -131,7 +154,9 @@ def connect(*, target: str = "work") -> tuple[Any, Any]:
 
 @contextlib.contextmanager
 def session(*, target: str = "work") -> Iterator[Any]:
+    _ensure_atexit()
     conn, connector = connect(target=target)
+    _OPEN.append((conn, connector))
     try:
         yield conn
     finally:
