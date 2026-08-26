@@ -82,7 +82,7 @@
       "args": ["C:/Tools/1C_mcp/scripts/run_server.py", "com"],
       "env": {
         "MCP_TRANSPORT": "stdio",
-        "MCP_COM_REV": "2-comtypes-crud",
+        "MCP_COM_REV": "3-com-session-close",
         "ONEC_PLATFORM_PATH": "C:/Program Files/1cv8/8.3.27.1719",
         "ONEC_IB_DEV": "C:/path/to/InfoBase_DEV",
         "ONEC_IB_WORK": "C:/path/to/InfoBase_WORK",

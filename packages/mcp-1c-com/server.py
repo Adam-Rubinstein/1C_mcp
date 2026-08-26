@@ -15,7 +15,7 @@ sys.path.insert(0, str(_ROOT / "shared"))
 from onec_mcp_shared import json_result, load_env_files, normalize_object_name  # noqa: E402
 from onec_mcp_shared.server_run import make_mcp, run_mcp  # noqa: E402
 
-from v8connect import call, connect, default_target, ib_label, wrap  # noqa: E402
+from v8connect import call, default_target, ib_label, session, wrap  # noqa: E402
 
 load_env_files(Path(__file__).with_name(".env"), _ROOT / ".env", Path.cwd() / ".env")
 
@@ -342,19 +342,19 @@ def com_ping(target: str = "") -> str:
     """Connect and read configuration name."""
     t = (target or default_target()).strip() or default_target()
     try:
-        conn = connect(target=t)
-        info: dict[str, Any] = {
-            "ok": True,
-            "connected": True,
-            **ib_label(t),
-        }
-        try:
-            meta = wrap(conn).Metadata
-            info["configurationName"] = str(meta.Name)
-            info["configurationVersion"] = str(getattr(meta, "Version", "") or "")
-        except Exception as exc:  # noqa: BLE001
-            info["metaError"] = str(exc)
-        return json_result(info)
+        with session(target=t) as conn:
+            info: dict[str, Any] = {
+                "ok": True,
+                "connected": True,
+                **ib_label(t),
+            }
+            try:
+                meta = wrap(conn).Metadata
+                info["configurationName"] = str(meta.Name)
+                info["configurationVersion"] = str(getattr(meta, "Version", "") or "")
+            except Exception as exc:  # noqa: BLE001
+                info["metaError"] = str(exc)
+            return json_result(info)
     except Exception as exc:  # noqa: BLE001
         return json_result({"ok": False, "error": str(exc), **ib_label(t)})
 
@@ -366,9 +366,9 @@ def com_query(query_text: str, limit: int = 100, target: str = "") -> str:
         return json_result({"ok": False, "error": "query_text is required"})
     t = (target or default_target()).strip() or default_target()
     try:
-        conn = connect(target=t)
-        columns, rows = _run_query(conn, query_text, limit=limit)
-        return json_result({"ok": True, "columns": columns, "rows": rows, "count": len(rows), "target": t})
+        with session(target=t) as conn:
+            columns, rows = _run_query(conn, query_text, limit=limit)
+            return json_result({"ok": True, "columns": columns, "rows": rows, "count": len(rows), "target": t})
     except Exception as exc:  # noqa: BLE001
         return json_result({"ok": False, "error": str(exc)})
 
@@ -379,21 +379,21 @@ def com_metadata_find(object_name: str, target: str = "") -> str:
     name = normalize_object_name(object_name)
     t = (target or default_target()).strip() or default_target()
     try:
-        conn = connect(target=t)
-        meta = wrap(conn).Metadata
-        meta_obj = call(meta, "FindByFullName", name)
-        if meta_obj is None:
-            meta_obj = call(meta, "FindByFullName", object_name)
-        if meta_obj is None:
-            return json_result({"ok": False, "error": f"Not found: {name}"})
-        return json_result(
-            {
-                "ok": True,
-                "fullName": str(getattr(wrap(meta_obj), "FullName", name)),
-                "name": str(wrap(meta_obj).Name),
-                "synonym": str(getattr(wrap(meta_obj), "Synonym", "") or ""),
-            }
-        )
+        with session(target=t) as conn:
+            meta = wrap(conn).Metadata
+            meta_obj = call(meta, "FindByFullName", name)
+            if meta_obj is None:
+                meta_obj = call(meta, "FindByFullName", object_name)
+            if meta_obj is None:
+                return json_result({"ok": False, "error": f"Not found: {name}"})
+            return json_result(
+                {
+                    "ok": True,
+                    "fullName": str(getattr(wrap(meta_obj), "FullName", name)),
+                    "name": str(wrap(meta_obj).Name),
+                    "synonym": str(getattr(wrap(meta_obj), "Synonym", "") or ""),
+                }
+            )
     except Exception as exc:  # noqa: BLE001
         return json_result({"ok": False, "error": str(exc)})
 
@@ -411,24 +411,24 @@ def com_get(
     t = (target or default_target()).strip() or default_target()
     try:
         kind, name = _parse_object(object_name)
-        conn = connect(target=t)
-        ref = _find_ref(conn, kind, name, uuid=uuid or None, number=number or None, code=code or None)
-        obj = _get_object(ref)
-        attrs = _meta_attr_names(conn, kind, name)
-        header = _read_header(obj, attrs, conn)
-        tabular: dict[str, Any] = {}
-        if include_tabular:
-            for ts in _ts_names(conn, kind, name):
-                tabular[ts] = _read_tabular(obj, ts, conn, kind, name)
-        return json_result(
-            {
-                "ok": True,
-                "object": f"{_KIND_EN[kind]}.{name}",
-                "header": header,
-                "tabular": tabular,
-                "target": t,
-            }
-        )
+        with session(target=t) as conn:
+            ref = _find_ref(conn, kind, name, uuid=uuid or None, number=number or None, code=code or None)
+            obj = _get_object(ref)
+            attrs = _meta_attr_names(conn, kind, name)
+            header = _read_header(obj, attrs, conn)
+            tabular: dict[str, Any] = {}
+            if include_tabular:
+                for ts in _ts_names(conn, kind, name):
+                    tabular[ts] = _read_tabular(obj, ts, conn, kind, name)
+            return json_result(
+                {
+                    "ok": True,
+                    "object": f"{_KIND_EN[kind]}.{name}",
+                    "header": header,
+                    "tabular": tabular,
+                    "target": t,
+                }
+            )
     except Exception as exc:  # noqa: BLE001
         return json_result({"ok": False, "error": str(exc)})
 
@@ -452,16 +452,16 @@ def com_write(
         if not isinstance(payload, dict) or not payload:
             return json_result({"ok": False, "error": "values must be a JSON object of attributes"})
         kind, name = _parse_object(object_name)
-        conn = connect(target=t)
-        ref = _find_ref(conn, kind, name, uuid=uuid or None, number=number or None, code=code or None)
-        obj = _get_object(ref)
-        applied: dict[str, Any] = {}
-        for key, raw in payload.items():
-            val = _resolve_value(conn, raw)
-            _set_attr(obj, str(key), val)
-            applied[str(key)] = _to_jsonable(val, conn)
-        _write_object(obj)
-        return json_result({"ok": True, "written": True, "applied": applied, "target": t})
+        with session(target=t) as conn:
+            ref = _find_ref(conn, kind, name, uuid=uuid or None, number=number or None, code=code or None)
+            obj = _get_object(ref)
+            applied: dict[str, Any] = {}
+            for key, raw in payload.items():
+                val = _resolve_value(conn, raw)
+                _set_attr(obj, str(key), val)
+                applied[str(key)] = _to_jsonable(val, conn)
+            _write_object(obj)
+            return json_result({"ok": True, "written": True, "applied": applied, "target": t})
     except Exception as exc:  # noqa: BLE001
         return json_result({"ok": False, "error": str(exc)})
 
@@ -482,12 +482,12 @@ def com_post(
         kind, name = _parse_object(object_name)
         if kind != "document":
             return json_result({"ok": False, "error": "com_post is for Document only"})
-        conn = connect(target=t)
-        ref = _find_ref(conn, kind, name, uuid=uuid or None, number=number or None, code=None)
-        obj = _get_object(ref)
-        _post_object(conn, obj)
-        posted = _to_jsonable(getattr(wrap(obj), "Posted", getattr(wrap(obj), "Проведен", None)), conn)
-        return json_result({"ok": True, "posted": posted, "target": t})
+        with session(target=t) as conn:
+            ref = _find_ref(conn, kind, name, uuid=uuid or None, number=number or None, code=None)
+            obj = _get_object(ref)
+            _post_object(conn, obj)
+            posted = _to_jsonable(getattr(wrap(obj), "Posted", getattr(wrap(obj), "Проведен", None)), conn)
+            return json_result({"ok": True, "posted": posted, "target": t})
     except Exception as exc:  # noqa: BLE001
         return json_result({"ok": False, "error": str(exc)})
 
@@ -508,12 +508,12 @@ def com_unpost(
         kind, name = _parse_object(object_name)
         if kind != "document":
             return json_result({"ok": False, "error": "com_unpost is for Document only"})
-        conn = connect(target=t)
-        ref = _find_ref(conn, kind, name, uuid=uuid or None, number=number or None, code=None)
-        obj = _get_object(ref)
-        _unpost_object(conn, obj)
-        posted = _to_jsonable(getattr(wrap(obj), "Posted", getattr(wrap(obj), "Проведен", None)), conn)
-        return json_result({"ok": True, "posted": posted, "target": t})
+        with session(target=t) as conn:
+            ref = _find_ref(conn, kind, name, uuid=uuid or None, number=number or None, code=None)
+            obj = _get_object(ref)
+            _unpost_object(conn, obj)
+            posted = _to_jsonable(getattr(wrap(obj), "Posted", getattr(wrap(obj), "Проведен", None)), conn)
+            return json_result({"ok": True, "posted": posted, "target": t})
     except Exception as exc:  # noqa: BLE001
         return json_result({"ok": False, "error": str(exc)})
 

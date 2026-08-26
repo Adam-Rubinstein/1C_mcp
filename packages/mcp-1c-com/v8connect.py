@@ -3,13 +3,18 @@
 win32com Dispatch('V83.COMConnector').Connect fails with TYPE_E_LIBNOTREGISTERED
 on 8.3.27. GetObject wrapping via ITypeComp also fails (E_NOTIMPL) — always use
 comtypes.client.dynamic._Dispatch.
+
+Always close the application object after a tool call: leftover COM sessions
+block Configurator exclusive lock on a file IB.
 """
 
 from __future__ import annotations
 
+import contextlib
 import ctypes
+import gc
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from onec_mcp_shared import env, is_work_target, resolve_ib, resolve_ib_auth
 
@@ -79,8 +84,25 @@ def call(obj: Any, name: str, *args: Any) -> Any:
     return wrap(fn)
 
 
-def connect(*, target: str = "work") -> Any:
-    """Open V83 COM connection. Default target=work (ERP КОПИЯ)."""
+def _release_dispatch(obj: Any) -> None:
+    if obj is None:
+        return
+    comobj = getattr(obj, "_comobj", obj)
+    try:
+        comobj.Release()
+    except Exception:
+        pass
+
+
+def close(conn: Any, connector: Any = None) -> None:
+    """Drop V83 application so the IB COM session ends."""
+    _release_dispatch(conn)
+    _release_dispatch(connector)
+    gc.collect()
+
+
+def connect(*, target: str = "work") -> tuple[Any, Any]:
+    """Open V83 COM connection. Returns (app, connector). Default target=work."""
     _patch_dynamic_dispatch()
     import comtypes.client
     from comtypes.gen.V83 import COMConnector, IV8COMConnector3
@@ -92,16 +114,28 @@ def connect(*, target: str = "work") -> Any:
     else:
         ib = resolve_ib("work")
         user, password = resolve_ib_auth("work")
-        t = "work"
 
     comtypes.client.GetModule(str(_comcntr_path()))
     connector = comtypes.client.CreateObject(COMConnector, interface=IV8COMConnector3)
+    try:
+        connector.MaxConnections = 1
+    except Exception:
+        pass
     conn_str = f'File="{ib}";'
     if user:
         conn_str += f'Usr="{user}";'
     conn_str += f'Pwd="{password}";'
     raw = connector.Connect(conn_str)
-    return wrap(raw)
+    return wrap(raw), connector
+
+
+@contextlib.contextmanager
+def session(*, target: str = "work") -> Iterator[Any]:
+    conn, connector = connect(target=target)
+    try:
+        yield conn
+    finally:
+        close(conn, connector)
 
 
 def default_target() -> str:
