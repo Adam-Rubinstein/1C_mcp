@@ -124,6 +124,26 @@ def _ensure_atexit() -> None:
     _ATEXIT_DONE = True
 
 
+def _is_server_target(target: str) -> bool:
+    t = (target or "").strip().lower()
+    return t in ("talanceva", "server", "srv", "prod_server")
+
+
+def _server_conn_parts(target: str) -> tuple[str, str, str, str]:
+    t = (target or "").strip().lower()
+    if t in ("talanceva", "server", "srv"):
+        server = env("ONEC_SERVER_TALANCEVA") or "srv1021:1841"
+        ref = env("ONEC_REF_TALANCEVA") or "Talanceva"
+        user = env("ONEC_USER_TALANCEVA") or env("ONEC_USER_WORK") or env("ONEC_USER", "") or ""
+        password = env("ONEC_PASSWORD_TALANCEVA")
+        if password is None:
+            password = env("ONEC_PASSWORD_WORK")
+        if password is None:
+            password = env("ONEC_PASSWORD", "") or ""
+        return server, ref, user, password or ""
+    raise ValueError(f"Unknown server IB target: {target!r}")
+
+
 def connect(*, target: str = "work") -> tuple[Any, Any]:
     """Open V83 COM connection. Returns (app, connector). Default target=work."""
     _patch_dynamic_dispatch()
@@ -131,12 +151,17 @@ def connect(*, target: str = "work") -> tuple[Any, Any]:
     from comtypes.gen.V83 import COMConnector, IV8COMConnector3
 
     t = (target or "work").strip().lower()
-    if t in ("dev", "develop", "sandbox", "base2"):
+    if _is_server_target(t):
+        server, ref, user, password = _server_conn_parts(t)
+        conn_str = f'Srvr="{server}";Ref="{ref}";'
+    elif t in ("dev", "develop", "sandbox", "base2"):
         ib = resolve_ib("dev")
         user, password = resolve_ib_auth("dev")
+        conn_str = f'File="{ib}";'
     else:
         ib = resolve_ib("work")
         user, password = resolve_ib_auth("work")
+        conn_str = f'File="{ib}";'
 
     comtypes.client.GetModule(str(_comcntr_path()))
     connector = comtypes.client.CreateObject(COMConnector, interface=IV8COMConnector3)
@@ -144,7 +169,6 @@ def connect(*, target: str = "work") -> tuple[Any, Any]:
         connector.MaxConnections = 1
     except Exception:
         pass
-    conn_str = f'File="{ib}";'
     if user:
         conn_str += f'Usr="{user}";'
     conn_str += f'Pwd="{password}";'
@@ -170,6 +194,9 @@ def default_target() -> str:
 
 def ib_label(target: str) -> dict[str, Any]:
     t = (target or default_target()).strip().lower()
+    if _is_server_target(t):
+        server, ref, user, _ = _server_conn_parts(t)
+        return {"target": "talanceva", "ib": f'Srvr="{server}";Ref="{ref}";', "user": user}
     work = is_work_target(t)
     try:
         ib = resolve_ib("work" if work else "dev")
