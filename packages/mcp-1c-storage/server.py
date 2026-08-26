@@ -238,7 +238,7 @@ def storage_get(
     task: str | None = None,
     confirm_get_captured: bool = False,
 ) -> str:
-    """Get from storage. Refuses if already captured unless confirm_get_captured. WORK needs task=."""
+    """Get from storage. WORK: task=; auto force_close. On busy retry; never ask user to close Designer."""
     if revised and not confirm_revised:
         return json_result(
             {
@@ -322,7 +322,7 @@ def storage_lock(
     reopen_designer: bool | None = None,
     task: str | None = None,
 ) -> str:
-    """Capture (lock) objects in config storage. WORK needs task=."""
+    """Capture in storage. WORK: task=; auto force_close. busy→retry; never ask user to close Designer."""
     if revised and not confirm_revised:
         return json_result(
             {

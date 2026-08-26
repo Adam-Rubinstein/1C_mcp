@@ -86,6 +86,17 @@ def _strip_cmd_quotes(cmd: str) -> str:
     )
 
 
+def _ibname_from_cmdline(cmd_unquoted: str) -> str | None:
+    """Parse /IBName Title or /IBName\"Title\" (single argv token from 1C starter)."""
+    m = re.search(r'/IBName\s*"([^"]+)"', cmd_unquoted, flags=re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+    m = re.search(r"/IBName\s+(.+?)(?=\s+/|$)", cmd_unquoted, flags=re.IGNORECASE)
+    if m:
+        return m.group(1).strip().strip('"').strip("'")
+    return None
+
+
 def _cmdline_matches_ib(cmdline: str, ib_path: str | Path) -> bool:
     """
     Match process to IB strictly.
@@ -98,13 +109,20 @@ def _cmdline_matches_ib(cmdline: str, ib_path: str | Path) -> bool:
     """
     needle = _norm(ib_path)
     cmd = cmdline or ""
+    # Parse /IBName before _strip_cmd_quotes — strip removes inner quotes and
+    # turns /IBName"ERP КОПИЯ" into /IBNameERP КОПИЯ (unparseable).
+    name = _ibname_from_cmdline(cmd)
+    if name:
+        mapping = _ibases_v8i_paths()
+        file_path = mapping.get(name)
+        if file_path and _norm(file_path) == needle:
+            return True
     cmd_unquoted = _strip_cmd_quotes(cmd)
     cmd_n = _norm(cmd_unquoted)
     if _path_token_in_cmdline(cmd_n, needle):
         return True
-    m = re.search(r"/IBName\s+(.+?)(?=\s+/|$)", cmd_unquoted, flags=re.IGNORECASE)
-    if m:
-        name = m.group(1).strip()
+    name = _ibname_from_cmdline(cmd_unquoted)
+    if name:
         mapping = _ibases_v8i_paths()
         file_path = mapping.get(name)
         if file_path and _norm(file_path) == needle:
@@ -155,9 +173,9 @@ def find_ib_processes(ib_path: str | Path) -> list[IbProcess]:
         if not _cmdline_matches_ib(cmd, ib_path):
             continue
         low = cmd.lower()
-        if "designer" in low:
+        if "designer" in low or "конфигуратор" in low:
             kind = "designer"
-        elif "enterprise" in low:
+        elif "enterprise" in low or "предприятие" in low:
             kind = "enterprise"
         else:
             kind = "unknown"
@@ -225,6 +243,23 @@ def kill_dbgs_orphans(owner_pids: list[int]) -> list[dict[str, Any]]:
     return report
 
 
+def clear_stale_ib_lock_files(ib_path: str | Path) -> list[str]:
+    """Remove .cfl lock files when no IB process holds the base (after force_close)."""
+    removed: list[str] = []
+    if find_ib_processes(ib_path):
+        return removed
+    root = Path(ib_path)
+    if not root.is_dir():
+        return removed
+    for cfl in root.glob("*.cfl"):
+        try:
+            cfl.unlink()
+            removed.append(str(cfl.name))
+        except OSError:
+            pass
+    return removed
+
+
 def close_ib_sessions(ib_path: str | Path, *, force: bool = False, timeout_sec: float = 30.0) -> list[dict[str, Any]]:
     procs = find_ib_processes(ib_path)
     report: list[dict[str, Any]] = []
@@ -250,6 +285,10 @@ def close_ib_sessions(ib_path: str | Path, *, force: bool = False, timeout_sec: 
             subprocess.run(["taskkill", "/PID", str(p.pid), "/F"], capture_output=True, check=False)
         if still_designers:
             report.extend(kill_dbgs_orphans(still_designers))
+    if force and not find_ib_processes(ib_path):
+        cleared = clear_stale_ib_lock_files(ib_path)
+        if cleared:
+            report.append({"clearedCfl": cleared})
     return report
 
 

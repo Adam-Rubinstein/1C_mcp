@@ -533,7 +533,7 @@ def load_objects(
     restart_even_on_fail: bool | None = None,
     task: str | None = None,
 ) -> str:
-    """Partial load. confirm=true. WORK: task=, lock receipt; Get not required if already captured."""
+    """WORK: get→lock first; manage_session+force_close; last load reopen_designer=true. Never ask user to close Designer."""
     if not confirm:
         return json_result(
             {
@@ -551,6 +551,19 @@ def load_objects(
         return json_result({"ok": False, "error": str(exc)})
 
     t = (target or "dev").strip().lower()
+    if _is_work_target(t):
+        if not manage_session:
+            return json_result(
+                {
+                    "ok": False,
+                    "error": "Refusing WORK load without manage_session=true.",
+                    "step": "require_manage_session",
+                    "hint": "Pass manage_session=true and force_close=true. Agent must close/reopen Designer, not ask the user.",
+                    "stop": True,
+                }
+            )
+        manage_session = True
+        force_close = True
     canon = _canon_objects(objects)
     parent_err = refuse_parent_object_without_confirm(
         canon, confirm_parent_object=confirm_parent_object

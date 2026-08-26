@@ -333,6 +333,7 @@ def run_designer(
     target: str = "dev",
     attach_storage: bool | None = None,
     extension_storage: bool = False,
+    prefer_ib_name: bool | None = None,
 ) -> DesignerResult:
     """
     Run Designer batch.
@@ -362,10 +363,15 @@ def run_designer(
         storage_args = storage_cli_args(extension=extension_storage)
         if not storage_args:
             raise ValueError("attach_storage requested but ONEC_STORAGE_PATH is empty")
+    use_ib_name = prefer_ib_name
+    if use_ib_name is None:
+        # WORK batch load: /IBName + IB-bound storage (no CLI re-auth). /F often fails
+        # «база уже открыта» on file IB when Configurator uses /IBName"Title".
+        use_ib_name = is_work_target(target) and not do_attach
     argv = [
         onec_bin,
         "DESIGNER",
-        *build_ib_args(target=target, prefer_ib_name=False),
+        *build_ib_args(target=target, prefer_ib_name=use_ib_name),
         *storage_args,
         "/DisableStartupDialogs",
         "/Out",
