@@ -73,6 +73,7 @@ def dump_objects(
     merge_into_repo: bool = True,
     confirm_merge_dev: bool = False,
     confirm_overwrite_dirty: bool = False,
+    confirm_discard_local_edits: bool = False,
     force_full: bool = False,
     target: str = "dev",
     manage_session: bool = False,
@@ -80,7 +81,7 @@ def dump_objects(
     reopen_designer: bool | None = None,
     task: str | None = None,
 ) -> str:
-    """Partial dump via Designer -listFile. WORK merge needs task= and refuses dirty git."""
+    """Partial dump via Designer -listFile. WORK merge: task=; dirty → stash+reapply (not overwrite)."""
     if force_full and not objects:
         return json_result({"ok": False, "error": "Full dump into repo is disabled. Pass objects."})
     if not objects:
@@ -261,11 +262,24 @@ def dump_objects(
             payload["mergeError"] = "REPO_CF / REPO_CFE not set"
         else:
             dirty_err = refuse_dirty_repo(
-                dump_dir, Path(repo), confirm_overwrite_dirty=confirm_overwrite_dirty
+                dump_dir,
+                Path(repo),
+                confirm_overwrite_dirty=confirm_overwrite_dirty,
+                confirm_discard_local_edits=confirm_discard_local_edits,
+                auto_stash=True,
             )
             if dirty_err:
-                payload.update(dirty_err)
-                return json_result(payload)
+                if dirty_err.get("stop"):
+                    payload.update(dirty_err)
+                    return json_result(payload)
+                # step reapply_stash: dirty stashed, repo cleaned — proceed merge, keep note
+                payload["dirtyStash"] = {
+                    "step": dirty_err.get("step"),
+                    "stashDir": dirty_err.get("stashDir"),
+                    "dirtyPaths": dirty_err.get("dirtyPaths"),
+                    "hint": dirty_err.get("hint"),
+                }
+                payload["step"] = dirty_err.get("step") or payload.get("step")
             report = merge_copy(dump_dir, Path(repo))
             junk = Path(repo) / "objects.txt"
             if junk.is_file():
@@ -274,7 +288,11 @@ def dump_objects(
             if designer_log.is_file():
                 designer_log.unlink()
             payload["mergeReport"] = report
-    return json_result(payload)
+            if payload.get("dirtyStash"):
+                payload["message"] = (
+                    "Dump merged after stashing dirty git files. "
+                    "Re-apply patch from dirtyStash.stashDir onto dumped files, then lock/load."
+                )
 
 
 @mcp.tool()

@@ -449,12 +449,93 @@ def test_designer_busy_payload_empty_log():
 
 
 def test_refuse_dirty_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    import subprocess
+
     from onec_mcp_shared.work_gates import refuse_dirty_repo
 
     src = tmp_path / "src"
     dst = tmp_path / "dst"
     src.mkdir()
     dst.mkdir()
+    subprocess.run(["git", "init"], cwd=dst, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.email", "t@t"],
+        cwd=dst,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "t"],
+        cwd=dst,
+        check=True,
+        capture_output=True,
+    )
+    (dst / "a.bsl").write_text("committed", encoding="utf-8")
+    subprocess.run(["git", "add", "a.bsl"], cwd=dst, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "init"],
+        cwd=dst,
+        check=True,
+        capture_output=True,
+    )
+    (dst / "a.bsl").write_text("old-dirty", encoding="utf-8")
     (src / "a.bsl").write_text("new", encoding="utf-8")
-    (dst / "a.bsl").write_text("old", encoding="utf-8")
-    assert refuse_dirty_repo(src, dst, confirm_overwrite_dirty=True) is None
+    # confirm_overwrite_dirty alone must NOT wipe (1346)
+    blocked = refuse_dirty_repo(src, dst, confirm_overwrite_dirty=True, auto_stash=False)
+    assert blocked is not None
+    assert blocked["step"] == "refuse_dirty_repo"
+    assert blocked.get("stop") is True
+    # explicit discard still allows wipe
+    assert (
+        refuse_dirty_repo(
+            src, dst, confirm_overwrite_dirty=True, confirm_discard_local_edits=True
+        )
+        is None
+    )
+
+
+def test_refuse_dirty_repo_auto_stash(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    import subprocess
+
+    from onec_mcp_shared import work_gates
+
+    repo = tmp_path / "repo"
+    dump = tmp_path / "dump"
+    repo.mkdir()
+    dump.mkdir()
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.email", "t@t"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "t"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    tracked = repo / "Module.bsl"
+    tracked.write_text("from-git\n", encoding="utf-8")
+    subprocess.run(["git", "add", "Module.bsl"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "init"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    tracked.write_text("local-patch-1346\n", encoding="utf-8")
+    (dump / "Module.bsl").write_text("from-ib-dump\n", encoding="utf-8")
+
+    gates = tmp_path / "gates"
+    gates.mkdir()
+    monkeypatch.setattr(work_gates, "_gates_root", lambda: gates)
+
+    info = work_gates.refuse_dirty_repo(dump, repo, auto_stash=True)
+    assert info is not None
+    assert info.get("ok") is True
+    assert info["step"] == "reapply_stash"
+    assert tracked.read_text(encoding="utf-8") == "from-git\n"
+    stash = Path(info["stashDir"])
+    assert (stash / "Module.bsl").read_text(encoding="utf-8") == "local-patch-1346\n"

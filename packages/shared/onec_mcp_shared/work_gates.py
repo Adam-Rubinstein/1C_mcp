@@ -818,28 +818,140 @@ def dirty_paths_vs_git(dest_dir: Path, rel_paths: list[str]) -> list[str]:
     return dirty
 
 
-def refuse_dirty_repo(
-    src_dir: Path,
-    dest_dir: Path,
-    *,
-    confirm_overwrite_dirty: bool = False,
-) -> dict[str, Any] | None:
-    if confirm_overwrite_dirty:
-        return None
+def _dirty_rels_for_merge(src_dir: Path, dest_dir: Path) -> list[str]:
     rels: list[str] = []
     if src_dir.is_dir():
         for src in src_dir.rglob("*"):
             if src.is_file():
                 rels.append(str(src.relative_to(src_dir)).replace("\\", "/"))
-    dirty = dirty_paths_vs_git(dest_dir, rels)
+    return dirty_paths_vs_git(dest_dir, rels)
+
+
+def _dirty_stash_root() -> Path:
+    path = _gates_root().parent / "dirty_stash"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def stash_dirty_paths(dest_dir: Path, dirty: list[str]) -> Path:
+    """Copy dirty repo files aside, then restore clean tree (HEAD or delete untracked)."""
+    root = _git_root(dest_dir)
+    if root is None:
+        raise RuntimeError("Cannot stash dirty paths: dest_dir is not inside a git repo")
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    stash_dir = _dirty_stash_root() / stamp
+    stash_dir.mkdir(parents=True, exist_ok=True)
+    manifest: list[dict[str, str]] = []
+    for posix in dirty:
+        abs_path = root / posix.replace("/", os.sep)
+        if not abs_path.is_file():
+            continue
+        dest = stash_dir / posix.replace("/", os.sep)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(abs_path.read_bytes())
+        tracked = subprocess.run(
+            ["git", "-C", str(root), "ls-files", "--error-unmatch", "--", posix],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+        )
+        if tracked.returncode == 0:
+            checkout = subprocess.run(
+                ["git", "-C", str(root), "checkout", "HEAD", "--", posix],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=30,
+            )
+            if checkout.returncode != 0:
+                raise RuntimeError(
+                    f"git checkout HEAD failed for {posix}: {checkout.stderr or checkout.stdout}"
+                )
+            kind = "tracked"
+        else:
+            abs_path.unlink()
+            kind = "untracked"
+        manifest.append({"path": posix, "kind": kind})
+    (stash_dir / "manifest.json").write_text(
+        json.dumps({"dirtyPaths": dirty, "files": manifest}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return stash_dir
+
+
+def refuse_dirty_repo(
+    src_dir: Path,
+    dest_dir: Path,
+    *,
+    confirm_overwrite_dirty: bool = False,
+    confirm_discard_local_edits: bool = False,
+    auto_stash: bool = True,
+) -> dict[str, Any] | None:
+    """Gate merge_into_repo over dirty git files.
+
+    - clean → None (proceed)
+    - dirty + confirm_discard_local_edits → None (explicit wipe; confirm_overwrite_dirty alone is NOT enough)
+    - dirty + auto_stash → stash aside, restore clean, return step reapply_stash (caller merges then agent re-applies)
+    - dirty + no stash / discard → refuse_dirty_repo
+    """
+    dirty = _dirty_rels_for_merge(src_dir, dest_dir)
     if not dirty:
         return None
+    if confirm_discard_local_edits:
+        return None
+    if confirm_overwrite_dirty and not confirm_discard_local_edits:
+        return {
+            "ok": False,
+            "error": (
+                "confirm_overwrite_dirty alone no longer allows wiping dirty files "
+                "(incident 1346). Use auto-stash (default) or confirm_discard_local_edits "
+                "only if the user explicitly asked to discard local edits."
+            ),
+            "step": "refuse_dirty_repo",
+            "dirtyPaths": dirty,
+            "hint": (
+                "Retry dump without confirm_overwrite_dirty — MCP will stash dirty paths, "
+                "merge dump, return stashDir + step=reapply_stash. Or set "
+                "confirm_discard_local_edits=true only after user said to discard local edits."
+            ),
+            "stop": True,
+        }
+    if auto_stash:
+        try:
+            stash_dir = stash_dirty_paths(dest_dir, dirty)
+        except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
+            return {
+                "ok": False,
+                "error": f"Failed to stash dirty paths before merge: {exc}",
+                "step": "refuse_dirty_repo",
+                "dirtyPaths": dirty,
+                "hint": "Fix git/permissions, or ask user to discard local edits explicitly.",
+                "stop": True,
+            }
+        return {
+            "ok": True,
+            "step": "reapply_stash",
+            "dirtyPaths": dirty,
+            "stashDir": str(stash_dir),
+            "hint": (
+                "Dirty files were stashed and repo restored to HEAD for merge. "
+                "After dump merge succeeds: re-apply your task patch from stashDir "
+                "onto the dumped files (surgery), then lock/load. Do not confirm_overwrite_dirty."
+            ),
+            "stop": False,
+        }
     return {
         "ok": False,
-        "error": "Refusing merge_into_repo over dirty git files (would wipe another agent's work).",
+        "error": "Refusing merge_into_repo over dirty git files (would wipe local/agent work).",
         "step": "refuse_dirty_repo",
         "dirtyPaths": dirty,
-        "hint": "Do not set confirm_overwrite_dirty unless the user explicitly asked to overwrite.",
+        "hint": (
+            "Do not use confirm_overwrite_dirty to wipe. Leave auto_stash (default) or "
+            "confirm_discard_local_edits only if the user explicitly asked to discard."
+        ),
         "stop": True,
     }
 
