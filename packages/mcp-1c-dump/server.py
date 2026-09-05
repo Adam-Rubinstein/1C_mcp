@@ -42,6 +42,8 @@ def _tmp_root() -> Path:
 @mcp.tool()
 def dump_status() -> str:
     """Health: ONEC_BIN, DEV/WORK IB, repo paths."""
+    from onec_mcp_shared.work_gates import _gates_root
+
     dev = env("ONEC_IB_DEV") or env("ONEC_IB")
     work = env("ONEC_IB_WORK")
     data = {
@@ -54,10 +56,13 @@ def dump_status() -> str:
         "extension": env("ONEC_EXTENSION"),
         "repoCf": env("REPO_CF"),
         "repoCfe": env("REPO_CFE"),
+        "gatesRoot": str(_gates_root()),
+        "mcpGatesRootEnv": (env("MCP_GATES_ROOT") or "").strip() or None,
         "storagePathSet": bool((env("ONEC_STORAGE_PATH") or "").strip()),
         "note": (
             "Default target=dev only for sandbox smoke. "
             "For 'from Configurator' use target=work. "
+            "WORK dump requires manage_session+force_close. "
             "manage_session on work reopens like 1C starter (/IBName + WORK user)."
         ),
     }
@@ -107,6 +112,24 @@ def dump_objects(
         reopen_designer = False
     if t in ("dev", "develop", "sandbox", "base2"):
         reopen_designer = False
+
+    if is_work_target(t):
+        if not manage_session:
+            return json_result(
+                {
+                    "ok": False,
+                    "error": "Refusing WORK dump without manage_session=true.",
+                    "step": "require_manage_session",
+                    "hint": (
+                        "Pass manage_session=true and force_close=true. "
+                        "Agent must close/reopen Designer, not ask the user. "
+                        "Do not python -c / shell Designer on InfoBase3."
+                    ),
+                    "stop": True,
+                }
+            )
+        manage_session = True
+        force_close = True
 
     ext_name_preview = None
     if extension is True:

@@ -389,7 +389,33 @@ def test_object_lock_same_task_reenters(tmp_path: Path, monkeypatch: pytest.Monk
     monkeypatch.setenv("DUMP_TMP_ROOT", str(tmp_path))
     objs = ["CommonModule.Foo"]
     assert wg.acquire_object_locks(objs, task="5359", target="work", extension="e") is None
+    # Same PID may re-enter
     assert wg.acquire_object_locks(objs, task="5359", target="work", extension="e") is None
+    wg.release_object_locks(objs, task="5359", target="work", extension="e")
+
+
+def test_object_lock_same_task_other_pid_waits(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from onec_mcp_shared import work_gates as wg
+
+    monkeypatch.setenv("DUMP_TMP_ROOT", str(tmp_path))
+    monkeypatch.setenv("MCP_OBJECT_LOCK_WAIT_SEC", "1")
+    monkeypatch.setenv("MCP_OBJECT_LOCK_TTL_SEC", "1800")
+    objs = ["CommonModule.Bar"]
+    assert wg.acquire_object_locks(objs, task="1359", target="work", extension="e") is None
+    # Simulate another process holding same task=
+    path = wg._object_lock_path("work", "e", "CommonModule.Bar")
+    data = wg._read_gate(path)
+    assert data is not None
+    data["pid"] = 1  # other holder
+    monkeypatch.setattr(wg, "_pid_alive", lambda pid: True)
+    path.write_text(__import__("json").dumps(data), encoding="utf-8")
+    err = wg.acquire_object_locks(objs, task="1359", target="work", extension="e")
+    assert err is not None
+    assert err["step"] == "object_held_by_other_task"
+    # cleanup: rewrite our pid then release
+    data["pid"] = __import__("os").getpid()
+    path.write_text(__import__("json").dumps(data), encoding="utf-8")
+    wg.release_object_locks(objs, task="1359", target="work", extension="e")
 
 
 def test_object_lock_timeout_still_held(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

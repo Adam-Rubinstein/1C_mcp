@@ -401,6 +401,38 @@ def start_ib_session(
     }
 
 
+def _ib_is_work(ib_path: str | Path) -> bool:
+    work = (env("ONEC_IB_WORK") or "").strip()
+    if not work:
+        return False
+    try:
+        return Path(ib_path).resolve() == Path(work).resolve()
+    except OSError:
+        return os.path.normcase(os.path.normpath(str(ib_path))) == os.path.normcase(
+            os.path.normpath(work)
+        )
+
+
+def _wait_designer_ready(ib_path: str | Path, *, timeout_sec: float = 90.0) -> dict[str, Any]:
+    """Poll until a Designer process for this IB is visible (or timeout)."""
+    deadline = time.time() + max(5.0, float(timeout_sec))
+    while time.time() < deadline:
+        procs = find_ib_processes(ib_path)
+        designers = [p for p in procs if p.kind == "designer"]
+        if designers:
+            return {
+                "ok": True,
+                "pids": [p.pid for p in designers],
+                "waitedSec": round(timeout_sec - (deadline - time.time()), 1),
+            }
+        time.sleep(0.5)
+    return {
+        "ok": False,
+        "error": "Designer not visible after reopen wait",
+        "waitedSec": timeout_sec,
+    }
+
+
 def with_managed_session(
     ib_path: str | Path,
     fn: Callable[[], T],
@@ -468,6 +500,8 @@ def _with_managed_session_body(
         error = exc
         meta["error"] = str(exc)
     if reopen and modes and (error is None or restart_even_on_fail):
+        from onec_mcp_shared.work_gates import clear_reopen_lease, write_reopen_lease
+
         started = []
         for mode in modes:
             started.append(
@@ -479,6 +513,24 @@ def _with_managed_session_body(
                 )
             )
         meta["started"] = started
+        # Hold mutex peers via reopen lease until Designer is observable
+        # (Popen returns before IB exclusive lock — «Ожидание запуска» race).
+        wait_ready_sec = 90.0
+        try:
+            wait_ready_sec = float(
+                (env("MCP_REOPEN_READY_WAIT_SEC") or "90").strip() or "90"
+            )
+        except ValueError:
+            wait_ready_sec = 90.0
+        lease_pids = [int(s.get("pid") or 0) for s in started if s.get("pid")]
+        for pid in lease_pids:
+            write_reopen_lease("work" if _ib_is_work(ib_path) else "dev", pid=pid)
+        ready = _wait_designer_ready(ib_path, timeout_sec=wait_ready_sec)
+        meta["reopenReady"] = ready
+        if ready.get("ok"):
+            # Brief settle so exclusive IB lock is taken before peers dump.
+            time.sleep(1.5)
+            clear_reopen_lease("work" if _ib_is_work(ib_path) else "dev")
         used_ibname = any(s.get("launch") == "IBName" for s in started)
         if used_ibname:
             meta["note"] = (

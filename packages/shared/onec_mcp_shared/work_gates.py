@@ -645,7 +645,7 @@ def acquire_object_locks(
     extension: str | None,
     tool: str = "",
 ) -> dict[str, Any] | None:
-    """Queue per object: same task re-enters; other task waits (not refuse immediately)."""
+    """Queue per object: same task+same PID re-enters; other PID/task waits."""
     if not _is_work(target):
         return None
     task_s = (task or "").strip()
@@ -663,16 +663,46 @@ def acquire_object_locks(
             data = _read_gate(path)
             if data:
                 other = str(data.get("task") or "").strip()
-                if other == task_s:
+                holder_pid = int(data.get("pid") or 0)
+                same_task = other == task_s
+                same_holder = holder_pid == my_pid
+                # Same agent (same PID) may re-enter dump→lock→load.
+                # Another process with the same task= must wait (no dual dump_1359).
+                if same_task and same_holder:
                     data["ts"] = now
-                    data["pid"] = my_pid
                     data["tool"] = tool or data.get("tool")
                     path.write_text(
                         json.dumps(data, ensure_ascii=False, indent=2),
                         encoding="utf-8",
                     )
                     break
-                if not _object_lock_stale(data, now=now, ttl=ttl):
+                if same_task and not same_holder and not _object_lock_stale(data, now=now, ttl=ttl):
+                    if now >= deadline:
+                        return {
+                            "ok": False,
+                            "error": (
+                                "Object held by another process with the same task "
+                                f"(wait timed out after {wait_sec}s)."
+                            ),
+                            "step": "object_held_by_other_task",
+                            "held": [
+                                {
+                                    "object": obj,
+                                    "task": other,
+                                    "pid": holder_pid,
+                                    "tool": data.get("tool"),
+                                }
+                            ],
+                            "task": task_s,
+                            "hint": (
+                                "Same task= from another PID — wait; do not parallel dump/load. "
+                                "One agent pipeline only."
+                            ),
+                            "stop": True,
+                        }
+                    time.sleep(poll)
+                    continue
+                if (not same_task) and not _object_lock_stale(data, now=now, ttl=ttl):
                     if now >= deadline:
                         return {
                             "ok": False,
@@ -961,6 +991,72 @@ def _designer_lock_path(target: str) -> Path:
     return _gates_root() / name
 
 
+def _reopen_lease_path(target: str) -> Path:
+    name = "work_designer.reopen.json" if _is_work(target) else "dev_designer.reopen.json"
+    return _gates_root() / name
+
+
+def write_reopen_lease(target: str, *, pid: int, ttl_sec: int | None = None) -> None:
+    """Soft lease after interactive Designer Popen — peers wait until ready/TTL."""
+    if not _is_work(target):
+        return
+    ttl = int(ttl_sec) if ttl_sec is not None else _int_env("MCP_REOPEN_LEASE_TTL_SEC", 90)
+    path = _reopen_lease_path(target)
+    path.write_text(
+        json.dumps(
+            {
+                "kind": "designer_reopen_lease",
+                "pid": int(pid),
+                "ts": time.time(),
+                "ttl_sec": ttl,
+                "target": (target or "work").strip().lower(),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+
+def clear_reopen_lease(target: str) -> None:
+    if not _is_work(target):
+        return
+    path = _reopen_lease_path(target)
+    try:
+        path.unlink()
+    except OSError:
+        pass
+
+
+def _reopen_lease_blocks(target: str, *, my_pid: int) -> dict[str, Any] | None:
+    """Return busy payload if another process still holds reopen lease."""
+    if not _is_work(target):
+        return None
+    path = _reopen_lease_path(target)
+    data = _read_gate(path)
+    if not data:
+        return None
+    pid = int(data.get("pid") or 0)
+    ttl = int(data.get("ttl_sec") or _int_env("MCP_REOPEN_LEASE_TTL_SEC", 90))
+    age = time.time() - float(data.get("ts") or 0)
+    if pid == my_pid:
+        return None
+    if age > ttl or (pid > 0 and not _pid_alive(pid)):
+        try:
+            path.unlink()
+        except OSError:
+            pass
+        return None
+    return {
+        "ok": False,
+        "error": "WORK Configurator reopen still in progress (reopen lease).",
+        "step": "work_designer_busy",
+        "holder": data,
+        "hint": "Wait for interactive Designer to finish starting; do not taskkill /IM 1cv8.exe.",
+        "stop": True,
+    }
+
+
 def acquire_designer_lock(target: str, *, tool: str = "") -> dict[str, Any] | None:
     if not _is_work(target):
         return None
@@ -971,6 +1067,12 @@ def acquire_designer_lock(target: str, *, tool: str = "") -> dict[str, Any] | No
     deadline = time.time() + wait_sec
     my_pid = os.getpid()
     while True:
+        lease_err = _reopen_lease_blocks(target, my_pid=my_pid)
+        if lease_err:
+            if time.time() >= deadline:
+                return lease_err
+            time.sleep(poll)
+            continue
         data = _read_gate(path)
         if data:
             pid = int(data.get("pid") or 0)
