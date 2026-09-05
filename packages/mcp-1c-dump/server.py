@@ -293,6 +293,7 @@ def dump_objects(
                     "Dump merged after stashing dirty git files. "
                     "Re-apply patch from dirtyStash.stashDir onto dumped files, then lock/load."
                 )
+    return json_result(payload)
 
 
 @mcp.tool()
