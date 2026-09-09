@@ -76,6 +76,8 @@ UI **Tools & MCPs** «N tools enabled» can be **lower** than Python `list_tools
 | Keep MCP tool descriptions **short** (1–3 lines); put gate details in README/rules | Put ~900-char gate essays in `load_objects` docstring |
 | Bump `MCP_LOAD_REV` in project `mcp.json`, then Reload Window if needed | Kill all Python MCP processes as the first fix |
 
+**Windows / Cursor stdio:** use `…/.venv/Scripts/pythonw.exe` in `mcp.json` (not `python.exe`). Console `python.exe` + MCP client timeout on long Designer dump/load → orphan servers and a storm of `.venv\Scripts` windows (incident 2026-09-09 / Estet 5753). See [mcp.json.example](../mcp.json.example).
+
 Incident (2026-07-23): Cursor dropped `load_status` while keeping `load_prepare_work` + `load_objects` → UI showed **2**. Fix in toolkit: short descriptions + rename to `load_health`.
 
 ## WORK load / storage hard gates (1286)
