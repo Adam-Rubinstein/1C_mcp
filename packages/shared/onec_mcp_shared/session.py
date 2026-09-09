@@ -499,11 +499,20 @@ def _with_managed_session_body(
     except Exception as exc:  # noqa: BLE001
         error = exc
         meta["error"] = str(exc)
-    if reopen and modes and (error is None or restart_even_on_fail):
+    start_modes = list(modes)
+    if (
+        reopen
+        and not start_modes
+        and (error is None or restart_even_on_fail)
+        and _ib_is_work(ib_path)
+    ):
+        start_modes = ["designer"]
+
+    if reopen and start_modes and (error is None or restart_even_on_fail):
         from onec_mcp_shared.work_gates import clear_reopen_lease, write_reopen_lease
 
         started = []
-        for mode in modes:
+        for mode in start_modes:
             started.append(
                 start_ib_session(
                     ib_path,
