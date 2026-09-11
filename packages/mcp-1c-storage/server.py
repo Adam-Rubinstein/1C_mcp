@@ -231,6 +231,7 @@ def storage_get(
     confirm_force: bool = False,
     entire_config: bool = False,
     confirm_entire: bool = False,
+    include_child_objects: bool = True,
     extension: str | bool | None = None,
     manage_session: bool = True,
     force_close: bool = True,
@@ -288,7 +289,9 @@ def storage_get(
         args.append("-force")
     if not entire_config:
         list_file = work / "objects.txt"
-        write_storage_objects_file(canon, list_file)
+        write_storage_objects_file(
+            canon, list_file, include_child_objects=include_child_objects
+        )
         args.extend(["-Objects", str(list_file)])
     ext_name = _extension_name(extension)
     if ext_name:
@@ -315,6 +318,7 @@ def storage_lock(
     confirm_revised: bool = False,
     entire_config: bool = False,
     confirm_entire: bool = False,
+    include_child_objects: bool = True,
     confirm_parent_object: bool = False,
     extension: str | bool | None = None,
     manage_session: bool = True,
@@ -360,7 +364,9 @@ def storage_lock(
         args.append("-revised")
     if not entire_config:
         list_file = work / "objects.txt"
-        write_storage_objects_file(canon, list_file)
+        write_storage_objects_file(
+            canon, list_file, include_child_objects=include_child_objects
+        )
         args.extend(["-Objects", str(list_file)])
     if ext_name:
         args.extend(["-Extension", ext_name])
@@ -386,6 +392,7 @@ def storage_unlock(
     confirm_force: bool = False,
     entire_config: bool = False,
     confirm_entire: bool = False,
+    include_child_objects: bool = True,
     extension: str | bool | None = None,
     manage_session: bool = True,
     force_close: bool = True,
@@ -415,7 +422,9 @@ def storage_unlock(
         args.append("-force")
     if not entire_config:
         list_file = work / "objects.txt"
-        write_storage_objects_file(canon, list_file)
+        write_storage_objects_file(
+            canon, list_file, include_child_objects=include_child_objects
+        )
         args.extend(["-Objects", str(list_file)])
     ext_name = _extension_name(extension)
     if ext_name:
@@ -447,6 +456,7 @@ def storage_commit(
     confirm_force: bool = False,
     entire_config: bool = False,
     confirm_entire: bool = False,
+    include_child_objects: bool = True,
     extension: str | bool | None = None,
     target: str = "work",
     manage_session: bool = True,
@@ -495,7 +505,9 @@ def storage_commit(
         args.append("-force")
     if not entire_config:
         list_file = work / "objects.txt"
-        write_storage_objects_file(canon, list_file)
+        write_storage_objects_file(
+            canon, list_file, include_child_objects=include_child_objects
+        )
         args.extend(["-Objects", str(list_file)])
     ext_name = _extension_name(extension)
     if ext_name:
