@@ -13,7 +13,7 @@ Transport: **local stdio** (Cursor on the same PC as the toolkit) or **HTTP SSE 
 | `1c-load` | `load_health`, `load_prepare_work`, `load_objects`, `prepare_new_main_object`, `restore_configuration_ext` | yes | DEV smoke; WORK only on explicit request | Load XML/BSL into IB; WORK hard-gates (storage markers, session) |
 | `1c-storage` | `storage_status`, `storage_get`, `storage_lock`, `storage_unlock`, `storage_commit`, `storage_report` | WORK + storage UNC | WORK | Configuration repository get/lock/put |
 | `1c-com` | `com_status`, `com_ping`, `com_query`, `com_get`, `com_write`, `com_post`, `com_unpost`, `com_metadata_find` | yes | **WORK** (use `target=dev` for sandbox) | Live data via COM; write/post need `confirm=true` |
-| `1c-files` | `files_status`, `files_search`, `files_find_usages`, `files_read`, `files_list_procedures`, `files_read_procedure`, `files_outline`, `graph_rebuild`, `graph_status`, `graph_callers`, `graph_callees` | no | — | Search/read under `REPO_CF` / `REPO_CFE` / `CONFIG_DUMP_DIR`; BSL procedure outline; prefix-scoped call graph (`ONEC_VENDOR_PREFIXES`) |
+| `1c-files` | `files_*`, `graph_*`, `rag_reindex`, `rag_status`, `rag_search`, `rag_mark_dirty` | no | — | Search/read; BSL procedure outline; prefix call-graph; metadata FTS RAG (`ONEC_VENDOR_PREFIXES`, `DUMP_TMP_ROOT`) |
 | `1c-review` | `review_status`, `review_list_rules`, `review_check` | no | — | Static checklist before handoff |
 | `1c-journal` | `journal_status`, `journal_recent` | yes | **DEV only** | Event log read |
 | `1c-debug` | `debug_*` (attach, breakpoints, step, eval) | debug server | DEV (`ONEC_DEBUG_DENY_WORK=1`) | Attach to platform `dbgs` / debug HTTP |

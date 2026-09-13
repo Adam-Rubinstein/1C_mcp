@@ -16,6 +16,7 @@ from onec_mcp_shared.bsl_callgraph import (  # noqa: E402
     save_graph,
 )
 from onec_mcp_shared.bsl_units import extract_unit, outline  # noqa: E402
+from onec_mcp_shared import meta_rag  # noqa: E402
 from onec_mcp_shared.work_gates import is_forbidden_secret_path, path_is_under  # noqa: E402
 from onec_mcp_shared.server_run import make_mcp, run_mcp  # noqa: E402
 
@@ -63,6 +64,10 @@ def _graph_cache_path() -> Path:
     if raw:
         return Path(raw) / "bsl-callgraph.json"
     return Path.cwd() / ".tmp" / "bsl-callgraph.json"
+
+
+def _dump_tmp() -> str | None:
+    return env("DUMP_TMP_ROOT") or env("ONEC_RAG_CACHE") or None
 
 
 def _parse_prefixes(prefixes: str = "") -> list[str] | None:
@@ -292,6 +297,43 @@ def graph_callees(unit: str, limit: int = 50) -> str:
     stale = graph_is_stale(index, roots) if roots else False
     edges = query_edges(index, unit=unit, direction="callees", limit=limit)
     return json_result({"ok": True, "unit": unit, "stale": stale, "count": len(edges), "edges": edges})
+
+
+@mcp.tool()
+def rag_reindex() -> str:
+    """Rebuild metadata FTS index (Name/Synonym/Comment) over dump roots. Clears dirty flag."""
+    roots = _roots()
+    if not roots:
+        return json_result({"ok": False, "error": "Set CONFIG_DUMP_DIR and/or REPO_CF / REPO_CFE"})
+    result = meta_rag.reindex(roots, dump_tmp=_dump_tmp())
+    return json_result(result)
+
+
+@mcp.tool()
+def rag_status() -> str:
+    """Metadata RAG index status; stale/dirty means call rag_reindex before trusting hits."""
+    roots = _roots()
+    return json_result(meta_rag.status(roots, dump_tmp=_dump_tmp()))
+
+
+@mcp.tool()
+def rag_search(query: str, limit: int = 20) -> str:
+    """Search configuration metadata by name/synonym/comment (FTS). Prefer over grepping whole dump."""
+    st = meta_rag.status(_roots(), dump_tmp=_dump_tmp())
+    if st.get("stale") or st.get("dirty"):
+        # still search if index exists, but warn
+        pass
+    result = meta_rag.search(query, dump_tmp=_dump_tmp(), limit=limit)
+    if isinstance(result, dict):
+        result["index"] = {k: st.get(k) for k in ("exists", "stale", "dirty", "builtAtIso", "docCount")}
+    return json_result(result)
+
+
+@mcp.tool()
+def rag_mark_dirty() -> str:
+    """Mark metadata/graph indexes dirty (e.g. after dump merge). Agent should rag_reindex + graph_rebuild."""
+    meta_rag.mark_dirty(_dump_tmp())
+    return json_result({"ok": True, "dirty": True, "hint": "Call rag_reindex and graph_rebuild"})
 
 
 def _parse_glob_suffixes(glob_pat: str) -> set[str] | None:

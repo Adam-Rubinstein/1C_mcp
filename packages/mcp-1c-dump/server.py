@@ -29,6 +29,7 @@ from onec_mcp_shared.work_gates import (  # noqa: E402
 )
 from onec_mcp_shared.server_run import make_mcp, run_mcp  # noqa: E402
 from onec_mcp_shared.session import with_managed_session  # noqa: E402
+from onec_mcp_shared import meta_rag  # noqa: E402
 
 load_env_files(Path(__file__).with_name(".env"), Path.cwd() / ".env", Path(_ROOT).parent / ".env")
 
@@ -316,6 +317,13 @@ def dump_objects(
                     "Dump merged after stashing dirty git files. "
                     "Re-apply patch from dirtyStash.stashDir onto dumped files, then lock/load."
                 )
+            # Indexes (RAG / call-graph) are stale after successful merge into repo
+            try:
+                meta_rag.mark_dirty(env("DUMP_TMP_ROOT") or None)
+                payload["indexesDirty"] = True
+                payload["indexesHint"] = "Call rag_reindex and graph_rebuild (1c-files) after dump merge"
+            except Exception as exc:  # noqa: BLE001
+                payload["indexesDirtyError"] = str(exc)
     return json_result(payload)
 
 
