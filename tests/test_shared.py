@@ -19,6 +19,36 @@ from onec_mcp_shared import (  # noqa: E402
 )
 
 
+def test_bsl_units_and_callgraph(tmp_path: Path):
+    from onec_mcp_shared.bsl_callgraph import query_edges, rebuild_graph
+    from onec_mcp_shared.bsl_units import extract_unit, list_units
+
+    sample = (
+        "&НаСервере\n"
+        "Процедура Альфа(Х)\n"
+        "\tБета();\n"
+        "КонецПроцедуры\n"
+        "\n"
+        "Функция Бета()\n"
+        "\tВозврат 1;\n"
+        "КонецФункции\n"
+    )
+    units = list_units(sample)
+    assert [u.name for u in units] == ["Альфа", "Бета"]
+    found = extract_unit(sample, "Альфа")
+    assert found is not None
+    assert "КонецПроцедуры" in found[1]
+
+    mod = tmp_path / "CommonModules" / "Эст_X" / "Ext"
+    mod.mkdir(parents=True)
+    (mod / "Module.bsl").write_text(sample, encoding="utf-8")
+    idx = rebuild_graph([tmp_path], prefixes=["Эст_"])
+    assert idx["ok"] is True
+    assert idx["moduleCount"] == 1
+    callees = query_edges(idx, unit="Альфа", direction="callees")
+    assert any(e["callee_name"] == "Бета" for e in callees)
+
+
 def test_normalize_object_name_ru():
     assert normalize_object_name("Документ.Эст_Выпуск") == "Document.Эст_Выпуск"
     assert normalize_object_name("Document.Foo") == "Document.Foo"
