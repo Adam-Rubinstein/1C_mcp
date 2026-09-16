@@ -9,9 +9,9 @@ Transport: **local stdio** (Cursor on the same PC as the toolkit) or **HTTP SSE 
 | Server | Main tools | Needs IB | Default IB | Typical use |
 |--------|------------|----------|------------|-------------|
 | `1c-platform` | `platform_status`, `search`, `info`, `getMember`, `getMembers`, `getConstructors` | no | — | BSL types, methods, query/language help from platform install |
-| `1c-dump` | `dump_status`, `dump_objects`, `dump_changes` | yes | DEV or WORK via `target` | Partial / incremental dump Designer → files; optional merge into `REPO_CF`/`REPO_CFE` |
+| `1c-dump` | `dump_status`, `dump_objects`, `reapply_stash`, `dump_changes` | yes | DEV or WORK via `target` | Partial dump; WORK locked baseline receipts and three-way stash |
 | `1c-load` | `load_health`, `load_prepare_work`, `load_objects`, `prepare_new_main_object`, `restore_configuration_ext` | yes | DEV smoke; WORK only on explicit request | Load XML/BSL into IB; WORK hard-gates (storage markers, session) |
-| `1c-storage` | `storage_status`, `storage_get`, `storage_lock`, `storage_unlock`, `storage_commit`, `storage_report` | WORK + storage UNC | WORK | Configuration repository get/lock/put |
+| `1c-storage` | `storage_status`, `storage_get`, `storage_lock`, `storage_unlock`, `storage_commit`, `storage_report`, `storage_dump_version` | WORK + storage UNC | WORK | Configuration repository get/lock/put and read-only version export |
 | `1c-com` | `com_status`, `com_ping`, `com_query`, `com_get`, `com_write`, `com_post`, `com_unpost`, `com_metadata_find` | yes | **WORK** (use `target=dev` for sandbox) | Live data via COM; write/post need `confirm=true` |
 | `1c-files` | `files_*`, `graph_*`, `rag_reindex`, `rag_status`, `rag_search`, `rag_mark_dirty` | no | — | Search/read; BSL procedure outline; prefix call-graph; metadata FTS RAG (`ONEC_VENDOR_PREFIXES`, `DUMP_TMP_ROOT`) |
 | `1c-review` | `review_status`, `review_list_rules`, `review_check` | no | — | Static checklist before handoff |
@@ -35,13 +35,18 @@ Transport: **local stdio** (Cursor on the same PC as the toolkit) or **HTTP SSE 
 Hard order (MCP refuses skips):
 
 ```
-storage_get          # skip if already captured → refuse_get_captured → dump WORK instead
-→ dump / patch in repo
-→ storage_lock       # lock receipt
-→ load_objects(target=work, confirm, storage_captured, task=…,
-               manage_session, force_close)
-→ last success: reopen_designer=true
+storage_lock(exact objects, task)  # first mutating step; aligns uncaptured object
+→ dump_objects after lock → immutable baseline + receipt
+→ patch / reapply_stash three-way
+→ load_objects(..., integrity_receipt_id=...) → precheck + frozen source + post-dump
+→ storage_commit(task) only after verified load receipt
+→ verify storage tip; reopen_designer=true on final post-load dump
 ```
+
+`confirm_discard_local_edits` is rejected on WORK. Dirty files must pass through the pending-stash three-way gate.
+Destructive storage flags are rejected on WORK: captured/revised/force Get, revised lock, force unlock/commit. Recovery starts with a forensic snapshot.
+Automated WORK storage/load also rejects `entire_config`; use a non-empty exact object list.
+Direct `target_dir=REPO_CF/REPO_CFE` dumps are rejected; use protected merge or an isolated staging directory.
 
 Important refuse / recovery `step` values:
 
@@ -49,6 +54,12 @@ Important refuse / recovery `step` values:
 |--------|---------|
 | `refuse_get_captured` | Object already locked — dump from IB, do not Get |
 | `storage_lock_receipt` | Need `storage_lock` before WORK load |
+| `require_lock_before_dump` | WORK editable dump must follow the exact lock |
+| `require_locked_dump` | Source/task/object list is not the signed locked dump |
+| `refuse_pending_reapply` | Dirty stash has not been merged three-way |
+| `refuse_foreign_deletion` | Candidate removes locked Form/BSL content |
+| `work_changed_since_dump` | Live WORK no longer matches the baseline |
+| `post_load_regression` | Loaded WORK does not match source; commit is blocked |
 | `require_manage_session` | WORK load must manage Designer session |
 | `work_designer_busy` | Wait / force_close; never `taskkill /IM 1cv8.exe` |
 | `refuse_parent_object` | Prefer `Document.X.Form.Y`, not whole Document |

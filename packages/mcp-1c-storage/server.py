@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -17,6 +20,7 @@ from onec_mcp_shared import (  # noqa: E402
     require_storage_path,
     resolve_ib,
     run_designer,
+    write_list_file,
     write_storage_objects_file,
 )
 from onec_mcp_shared.work_gates import (  # noqa: E402
@@ -30,6 +34,16 @@ from onec_mcp_shared.work_gates import (  # noqa: E402
     require_work_task,
     write_aligned_marker,
     write_lock_receipt,
+)
+from onec_mcp_shared.work_integrity import (  # noqa: E402
+    IntegrityError,
+    check_load_receipt_for_commit,
+    check_pending_stash_receipt,
+    clear_integrity_receipts,
+    compare_current_snapshot,
+    hash_object_files,
+    read_load_receipt,
+    write_lock_receipt as write_integrity_lock_receipt,
 )
 from onec_mcp_shared.server_run import make_mcp, run_mcp  # noqa: E402
 from onec_mcp_shared.session import with_managed_session  # noqa: E402
@@ -49,6 +63,19 @@ def _refuse_entire(*, entire_config: bool, confirm_entire: bool) -> str | None:
             {
                 "ok": False,
                 "error": "entire_config=true requires confirm_entire=true.",
+                "stop": True,
+            }
+        )
+    return None
+
+
+def _refuse_entire_work(*, target: str, entire_config: bool) -> str | None:
+    if (target or "").strip().lower() in ("work", "prod", "base3") and entire_config:
+        return json_result(
+            {
+                "ok": False,
+                "error": "entire_config is forbidden in the automated WORK pipeline.",
+                "step": "require_exact_storage_objects",
                 "stop": True,
             }
         )
@@ -174,14 +201,34 @@ def _run_storage_op(
     return payload
 
 
-def _finish_storage(payload: dict, *, kind: str, objects: list[str], target: str, extension: str | None) -> str:
+def _finish_storage(
+    payload: dict,
+    *,
+    kind: str,
+    objects: list[str],
+    target: str,
+    extension: str | None,
+    task: str | None,
+) -> str:
     if payload.get("ok"):
         if kind == "get":
-            path = write_aligned_marker(objects, target=target, extension=extension)
+            path = write_aligned_marker(
+                objects, target=target, extension=extension, task=task
+            )
             payload["alignedMarker"] = str(path)
         elif kind == "lock":
-            path = write_lock_receipt(objects, target=target, extension=extension)
+            path = write_lock_receipt(
+                objects, target=target, extension=extension, task=task
+            )
             payload["lockReceipt"] = str(path)
+            if (task or "").strip():
+                integrity_path = write_integrity_lock_receipt(
+                    objects,
+                    task=task or "",
+                    target=target,
+                    extension=extension,
+                )
+                payload["integrityLockReceipt"] = str(integrity_path)
     return json_result(payload)
 
 
@@ -203,11 +250,13 @@ def storage_status() -> str:
                 "storage_unlock",
                 "storage_commit",
                 "storage_report",
+                "storage_dump_version",
                 "storage_status",
             ],
             "note": (
-                "Get/lock/unlock/commit need ONEC_STORAGE_*. "
-                "storage_commit requires confirm=true + comment; agent must not Put without user ask."
+                "WORK storage_get is forbidden; exact lock is the first mutating step. "
+                "storage_commit requires task-bound verified load, "
+                "confirm=true and user-approved comment."
             ),
         }
     )
@@ -219,6 +268,38 @@ def _extension_name(extension: str | bool | None) -> str | None:
     if isinstance(extension, str) and extension:
         return extension
     return None
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _run_local_onec(argv: list[str], log_path: Path, *, timeout_sec: int = 3600) -> tuple[int, str]:
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        proc = subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout_sec,
+            check=False,
+        )
+        text = ""
+        if log_path.is_file():
+            text = log_path.read_text(encoding="utf-8-sig", errors="replace")
+        if proc.stdout:
+            text += "\n" + proc.stdout
+        if proc.stderr:
+            text += "\n" + proc.stderr
+        return proc.returncode, text
+    except subprocess.TimeoutExpired as exc:
+        return 1, f"Local 1C command timed out after {timeout_sec}s: {exc}"
 
 
 @mcp.tool(name="storage_get")
@@ -240,6 +321,24 @@ def storage_get(
     confirm_get_captured: bool = False,
 ) -> str:
     """Get from storage. WORK: task=; auto force_close. On busy retry; never ask user to close Designer."""
+    if (target or "").strip().lower() in ("work", "prod", "base3"):
+        return json_result(
+            {
+                "ok": False,
+                "error": (
+                    "storage_get is forbidden in the automated WORK edit pipeline. "
+                    "Use exact storage_lock first; it aligns an uncaptured object before the locked dump."
+                ),
+                "step": "use_storage_lock",
+                "stop": True,
+            }
+        )
+    entire_work_error = _refuse_entire_work(
+        target=target,
+        entire_config=entire_config,
+    )
+    if entire_work_error:
+        return entire_work_error
     if revised and not confirm_revised:
         return json_result(
             {
@@ -266,6 +365,16 @@ def storage_get(
     task_err = require_work_task(task, target=target)
     if task_err:
         return json_result(task_err)
+    if (target or "").strip().lower() in ("work", "prod", "base3"):
+        pending_err = check_pending_stash_receipt(
+            canon,
+            task=task or "",
+            target=target,
+            extension=ext_name,
+        )
+        if pending_err:
+            pending_err["step"] = "refuse_pending_reapply"
+            return json_result(pending_err)
     cap_err = refuse_get_captured(
         canon,
         target=target,
@@ -307,7 +416,14 @@ def storage_get(
         work=work,
         extension_storage=bool(ext_name),
     )
-    return _finish_storage(payload, kind="get", objects=canon, target=target, extension=ext_name)
+    return _finish_storage(
+        payload,
+        kind="get",
+        objects=canon,
+        target=target,
+        extension=ext_name,
+        task=task,
+    )
 
 
 @mcp.tool(name="storage_lock")
@@ -327,6 +443,21 @@ def storage_lock(
     task: str | None = None,
 ) -> str:
     """Capture in storage. WORK: task=; auto force_close. busy→retry; never ask user to close Designer."""
+    entire_work_error = _refuse_entire_work(
+        target=target,
+        entire_config=entire_config,
+    )
+    if entire_work_error:
+        return entire_work_error
+    if (target or "").strip().lower() in ("work", "prod", "base3") and revised:
+        return json_result(
+            {
+                "ok": False,
+                "error": "revised storage_lock is forbidden in the automated WORK pipeline.",
+                "step": "refuse_work_destructive_storage",
+                "stop": True,
+            }
+        )
     if revised and not confirm_revised:
         return json_result(
             {
@@ -351,6 +482,16 @@ def storage_lock(
     task_err = require_work_task(task, target=target)
     if task_err:
         return json_result(task_err)
+    if (target or "").strip().lower() in ("work", "prod", "base3"):
+        pending_err = check_pending_stash_receipt(
+            canon,
+            task=task or "",
+            target=target,
+            extension=ext_name,
+        )
+        if pending_err:
+            pending_err["step"] = "refuse_pending_reapply"
+            return json_result(pending_err)
     lock_err = acquire_object_locks(
         canon, task=task or "", target=target, extension=ext_name, tool="storage_lock"
     )
@@ -381,7 +522,14 @@ def storage_lock(
         work=work,
         extension_storage=bool(ext_name),
     )
-    return _finish_storage(payload, kind="lock", objects=canon, target=target, extension=ext_name)
+    return _finish_storage(
+        payload,
+        kind="lock",
+        objects=canon,
+        target=target,
+        extension=ext_name,
+        task=task,
+    )
 
 
 @mcp.tool(name="storage_unlock")
@@ -400,6 +548,21 @@ def storage_unlock(
     task: str | None = None,
 ) -> str:
     """Release capture. force discards local changes — needs confirm_force."""
+    entire_work_error = _refuse_entire_work(
+        target=target,
+        entire_config=entire_config,
+    )
+    if entire_work_error:
+        return entire_work_error
+    if (target or "").strip().lower() in ("work", "prod", "base3") and force:
+        return json_result(
+            {
+                "ok": False,
+                "error": "force storage_unlock is forbidden in the automated WORK pipeline.",
+                "step": "refuse_work_destructive_storage",
+                "stop": True,
+            }
+        )
     if force and not confirm_force:
         return json_result(
             {
@@ -414,6 +577,20 @@ def storage_unlock(
     if err:
         return err
     assert canon is not None
+    task_err = require_work_task(task, target=target)
+    if task_err:
+        return json_result(task_err)
+    ext_name = _extension_name(extension)
+    if (target or "").strip().lower() in ("work", "prod", "base3"):
+        pending_err = check_pending_stash_receipt(
+            canon,
+            task=task or "",
+            target=target,
+            extension=ext_name,
+        )
+        if pending_err:
+            pending_err["step"] = "refuse_pending_reapply"
+            return json_result(pending_err)
 
     work = Path(env("DUMP_TMP_ROOT", str(Path.cwd() / ".tmp" / "1c-storage"))) / now_stamp()
     work.mkdir(parents=True, exist_ok=True)
@@ -426,7 +603,6 @@ def storage_unlock(
             canon, list_file, include_child_objects=include_child_objects
         )
         args.extend(["-Objects", str(list_file)])
-    ext_name = _extension_name(extension)
     if ext_name:
         args.extend(["-Extension", ext_name])
 
@@ -443,6 +619,13 @@ def storage_unlock(
     if payload.get("ok"):
         release_object_locks(canon, task=task, target=target, extension=ext_name)
         clear_lock_receipts(canon, target=target, extension=ext_name)
+        if canon and (task or "").strip():
+            payload["clearedIntegrityReceipts"] = clear_integrity_receipts(
+                canon,
+                task=task or "",
+                target=target,
+                extension=ext_name,
+            )
     return json_result(payload)
 
 
@@ -462,8 +645,24 @@ def storage_commit(
     manage_session: bool = True,
     force_close: bool = True,
     reopen_designer: bool | None = None,
+    task: str | None = None,
 ) -> str:
     """Put objects to storage. confirm=true + non-empty comment required. Agent: only on explicit user ask."""
+    entire_work_error = _refuse_entire_work(
+        target=target,
+        entire_config=entire_config,
+    )
+    if entire_work_error:
+        return entire_work_error
+    if (target or "").strip().lower() in ("work", "prod", "base3") and force:
+        return json_result(
+            {
+                "ok": False,
+                "error": "force storage_commit is forbidden in the automated WORK pipeline.",
+                "step": "refuse_work_destructive_storage",
+                "stop": True,
+            }
+        )
     if not confirm:
         return json_result(
             {
@@ -495,6 +694,27 @@ def storage_commit(
     if err:
         return err
     assert canon is not None
+    task_err = require_work_task(task, target=target)
+    if task_err:
+        return json_result(task_err)
+    if entire_config:
+        return json_result(
+            {
+                "ok": False,
+                "error": "Verified integrity commit currently requires an exact object list.",
+                "step": "require_exact_commit_objects",
+                "stop": True,
+            }
+        )
+    if keep_locked and (target or "").strip().lower() in ("work", "prod", "base3"):
+        return json_result(
+            {
+                "ok": False,
+                "error": "keep_locked=true is incompatible with verified WORK tip checks.",
+                "step": "require_verified_commit",
+                "stop": True,
+            }
+        )
 
     work = Path(env("DUMP_TMP_ROOT", str(Path.cwd() / ".tmp" / "1c-storage"))) / now_stamp()
     work.mkdir(parents=True, exist_ok=True)
@@ -510,21 +730,229 @@ def storage_commit(
         )
         args.extend(["-Objects", str(list_file)])
     ext_name = _extension_name(extension)
-    if ext_name:
-        args.extend(["-Extension", ext_name])
-
-    return json_result(
-        _run_storage_op(
-            args,
+    if (target or "").strip().lower() in ("work", "prod", "base3"):
+        integrity_error = check_load_receipt_for_commit(
+            canon,
+            task=task or "",
+            target=target,
+            extension=ext_name,
+        )
+        if integrity_error:
+            integrity_error["message"] = (
+                "Refusing storage_commit until the exact task/object load has passed post-load verification."
+            )
+            return json_result(integrity_error)
+        load_receipt_before = read_load_receipt(
+            canon,
+            task=task or "",
+            target=target,
+            extension=ext_name,
+        )
+        if load_receipt_before is None:
+            return json_result(
+                {
+                    "ok": False,
+                    "error": "Verified load receipt disappeared before commit.",
+                    "step": "require_verified_load_receipt",
+                    "stop": True,
+                }
+            )
+        precommit_dir = work / "pre-commit-snapshot"
+        precommit_dir.mkdir(parents=True, exist_ok=True)
+        precommit_list = precommit_dir / "objects.txt"
+        write_list_file(canon, precommit_list)
+        precommit_args = ["/DumpConfigToFiles", str(precommit_dir)]
+        if ext_name:
+            precommit_args.extend(["-Extension", ext_name])
+        precommit_args.extend(
+            ["-listFile", str(precommit_list), "-Format", "Hierarchical"]
+        )
+        precommit_payload = _run_storage_op(
+            precommit_args,
             objects=canon,
             target=target,
             manage_session=manage_session,
             force_close=force_close,
-            reopen_designer=reopen_designer,
-            work=work,
+            reopen_designer=False,
+            work=precommit_dir,
             extension_storage=bool(ext_name),
         )
+        if not precommit_payload.get("ok"):
+            precommit_payload["step"] = "pre_commit_snapshot_failed"
+            precommit_payload["stop"] = True
+            return json_result(precommit_payload)
+        try:
+            precommit_hashes = hash_object_files(precommit_dir, canon)
+        except (IntegrityError, OSError) as exc:
+            return json_result(
+                {
+                    "ok": False,
+                    "error": str(exc),
+                    "step": "pre_commit_snapshot_failed",
+                    "stop": True,
+                }
+            )
+        precommit_compare = compare_current_snapshot(
+            load_receipt_before["verifiedHashes"],
+            precommit_hashes,
+        )
+        if not precommit_compare.get("ok"):
+            return json_result(
+                {
+                    "ok": False,
+                    "error": "WORK changed after verified load; refusing storage_commit.",
+                    "step": "work_changed_after_load",
+                    "preCommitCompare": precommit_compare,
+                    "preCommitSnapshotDir": str(precommit_dir),
+                    "stop": True,
+                }
+            )
+        load_receipt_after = read_load_receipt(
+            canon,
+            task=task or "",
+            target=target,
+            extension=ext_name,
+        )
+        if load_receipt_after != load_receipt_before:
+            return json_result(
+                {
+                    "ok": False,
+                    "error": "Load receipt changed during pre-commit verification.",
+                    "step": "work_changed_after_load",
+                    "stop": True,
+                }
+            )
+    if ext_name:
+        args.extend(["-Extension", ext_name])
+
+    payload = _run_storage_op(
+        args,
+        objects=canon,
+        target=target,
+        manage_session=manage_session,
+        force_close=force_close,
+        reopen_designer=False,
+        work=work,
+        extension_storage=bool(ext_name),
     )
+    if payload.get("ok") and (target or "").strip().lower() in ("work", "prod", "base3"):
+        tip_get_dir = work / "tip-get"
+        tip_get_dir.mkdir(parents=True, exist_ok=True)
+        tip_list = tip_get_dir / "objects.txt"
+        write_storage_objects_file(
+            canon,
+            tip_list,
+            include_child_objects=include_child_objects,
+        )
+        tip_get_args = [
+            "/ConfigurationRepositoryUpdateCfg",
+            "-Objects",
+            str(tip_list),
+        ]
+        if ext_name:
+            tip_get_args.extend(["-Extension", ext_name])
+        tip_get_payload = _run_storage_op(
+            tip_get_args,
+            objects=canon,
+            target=target,
+            manage_session=manage_session,
+            force_close=force_close,
+            reopen_designer=False,
+            work=tip_get_dir,
+            extension_storage=bool(ext_name),
+        )
+        payload["tipGet"] = tip_get_payload
+        if not tip_get_payload.get("ok"):
+            payload["ok"] = False
+            payload["error"] = "Commit succeeded but storage tip Get failed."
+            payload["step"] = "post_commit_tip_verify_failed"
+            payload["stop"] = True
+        else:
+            tip_dump_dir = work / "tip-snapshot"
+            tip_dump_dir.mkdir(parents=True, exist_ok=True)
+            tip_dump_list = tip_dump_dir / "objects.txt"
+            write_list_file(canon, tip_dump_list)
+            tip_dump_args = ["/DumpConfigToFiles", str(tip_dump_dir)]
+            if ext_name:
+                tip_dump_args.extend(["-Extension", ext_name])
+            tip_dump_args.extend(
+                ["-listFile", str(tip_dump_list), "-Format", "Hierarchical"]
+            )
+            tip_dump_payload = _run_storage_op(
+                tip_dump_args,
+                objects=canon,
+                target=target,
+                manage_session=manage_session,
+                force_close=force_close,
+                reopen_designer=reopen_designer,
+                work=tip_dump_dir,
+                extension_storage=bool(ext_name),
+            )
+            payload["tipDump"] = tip_dump_payload
+            if not tip_dump_payload.get("ok"):
+                payload["ok"] = False
+                payload["error"] = "Commit succeeded but storage tip dump failed."
+                payload["step"] = "post_commit_tip_verify_failed"
+                payload["stop"] = True
+            else:
+                try:
+                    tip_hashes = hash_object_files(tip_dump_dir, canon)
+                except (IntegrityError, OSError) as exc:
+                    payload["ok"] = False
+                    payload["error"] = str(exc)
+                    payload["step"] = "post_commit_tip_verify_failed"
+                    payload["stop"] = True
+                else:
+                    tip_compare = compare_current_snapshot(
+                        load_receipt_before["verifiedHashes"],
+                        tip_hashes,
+                    )
+                    payload["storageTipSnapshotDir"] = str(tip_dump_dir)
+                    payload["storageTipCompare"] = tip_compare
+                    if not tip_compare.get("ok"):
+                        payload["ok"] = False
+                        payload["error"] = (
+                            "Committed storage tip does not match the verified WORK source."
+                        )
+                        payload["step"] = "post_commit_tip_mismatch"
+                        payload["stop"] = True
+                    else:
+                        payload["message"] = (
+                            "Storage commit finished; storage tip matches verified WORK/source."
+                        )
+    if payload.get("ok") and not keep_locked:
+        release_object_locks(
+            canon,
+            task=task,
+            target=target,
+            extension=ext_name,
+        )
+        clear_lock_receipts(canon, target=target, extension=ext_name)
+        payload["clearedIntegrityReceipts"] = clear_integrity_receipts(
+            canon,
+            task=task or "",
+            target=target,
+            extension=ext_name,
+        )
+    elif (
+        not payload.get("ok")
+        and payload.get("step", "").startswith("post_commit_")
+        and not keep_locked
+    ):
+        release_object_locks(
+            canon,
+            task=task,
+            target=target,
+            extension=ext_name,
+        )
+        clear_lock_receipts(canon, target=target, extension=ext_name)
+        payload["clearedIntegrityReceipts"] = clear_integrity_receipts(
+            canon,
+            task=task or "",
+            target=target,
+            extension=ext_name,
+        )
+    return json_result(payload)
 
 
 @mcp.tool(name="storage_report")
@@ -566,6 +994,197 @@ def storage_report(
     )
     payload["reportPath"] = str(out)
     payload["reportExists"] = out.is_file()
+    return json_result(payload)
+
+
+@mcp.tool(name="storage_dump_version")
+def storage_dump_version(
+    version: int,
+    output_path: str | None = None,
+    objects: list[str] | None = None,
+    extract_dir: str | None = None,
+    keep_configuration: bool = False,
+    target: str = "work",
+    extension: str | bool | None = None,
+    manage_session: bool = True,
+    force_close: bool = True,
+    reopen_designer: bool | None = None,
+) -> str:
+    """Read-only export of an exact repository version, optionally extracting objects."""
+    if version == 0 or version < -1:
+        return json_result(
+            {
+                "ok": False,
+                "error": "version must be a positive repository version or -1 for latest.",
+                "stop": True,
+            }
+        )
+
+    work = Path(env("DUMP_TMP_ROOT", str(Path.cwd() / ".tmp" / "1c-storage"))) / now_stamp()
+    work.mkdir(parents=True, exist_ok=True)
+    ext_name = _extension_name(extension)
+    suffix = ".cfe" if ext_name else ".cf"
+    out = Path(output_path) if output_path else work / f"storage-v{version}{suffix}"
+    if out.suffix.lower() != suffix:
+        return json_result(
+            {
+                "ok": False,
+                "error": f"output_path must have {suffix} extension.",
+                "stop": True,
+            }
+        )
+
+    tmp_root = Path(env("DUMP_TMP_ROOT", str(Path.cwd() / ".tmp" / "1c-storage"))).resolve().parent
+    try:
+        out.resolve().relative_to(tmp_root)
+    except ValueError:
+        return json_result(
+            {
+                "ok": False,
+                "error": f"output_path must be under {tmp_root}.",
+                "stop": True,
+            }
+        )
+
+    out.parent.mkdir(parents=True, exist_ok=True)
+    args = ["/ConfigurationRepositoryDumpCfg", str(out), "-v", str(version)]
+    if ext_name:
+        args.extend(["-Extension", ext_name])
+
+    payload = _run_storage_op(
+        args,
+        objects=[],
+        target=target,
+        manage_session=manage_session,
+        force_close=force_close,
+        reopen_designer=reopen_designer,
+        work=work,
+        extension_storage=bool(ext_name),
+    )
+    payload["version"] = version
+    payload["configurationPath"] = str(out)
+    payload["configurationExists"] = out.is_file()
+    if out.is_file():
+        payload["configurationSize"] = out.stat().st_size
+        payload["configurationSha256"] = _sha256_file(out)
+    elif payload.get("ok"):
+        payload["ok"] = False
+        payload["error"] = "Designer reported success but the exported configuration file is missing."
+
+    canon = _canon(objects)
+    if not payload.get("ok") or not canon:
+        return json_result(payload)
+    if ext_name:
+        payload["ok"] = False
+        payload["error"] = "Object extraction from historical CFE requires a matching main configuration and is not supported yet."
+        payload["stop"] = True
+        return json_result(payload)
+
+    extracted = Path(extract_dir) if extract_dir else work / f"objects-v{version}"
+    try:
+        extracted.resolve().relative_to(tmp_root)
+    except ValueError:
+        payload["ok"] = False
+        payload["error"] = f"extract_dir must be under {tmp_root}."
+        payload["stop"] = True
+        return json_result(payload)
+    extracted.mkdir(parents=True, exist_ok=True)
+
+    onec_bin = env("ONEC_BIN", "") or ""
+    if not Path(onec_bin).is_file():
+        payload["ok"] = False
+        payload["error"] = f"ONEC_BIN not found: {onec_bin}"
+        return json_result(payload)
+
+    ib_dir = work / f"extract-ib-v{version}"
+    if ib_dir.exists():
+        shutil.rmtree(ib_dir, ignore_errors=True)
+    create_log = work / "extract-create.out"
+    connection = f'File="{ib_dir}";'
+    create_args = [
+        onec_bin,
+        "CREATEINFOBASE",
+        connection,
+        "/UseTemplate",
+        str(out),
+        "/AddInListN",
+        "/DisableStartupDialogs",
+        "/Out",
+        str(create_log),
+    ]
+    create_code, create_text = _run_local_onec(create_args, create_log)
+    if create_code != 0:
+        shutil.rmtree(ib_dir, ignore_errors=True)
+        empty_args = [
+            onec_bin,
+            "CREATEINFOBASE",
+            connection,
+            "/AddInListN",
+            "/DisableStartupDialogs",
+            "/Out",
+            str(create_log),
+        ]
+        empty_code, empty_text = _run_local_onec(empty_args, create_log)
+        load_log = work / "extract-load.out"
+        load_args = [
+            onec_bin,
+            "DESIGNER",
+            "/F",
+            str(ib_dir),
+            "/DisableStartupDialogs",
+            "/Out",
+            str(load_log),
+            "/LoadCfg",
+            str(out),
+        ]
+        load_code, load_text = _run_local_onec(load_args, load_log)
+        create_text = "\n".join((create_text, empty_text, load_text))
+        create_code = empty_code or load_code
+
+    payload["extractCreateLogTail"] = "\n".join(create_text.splitlines()[-40:])
+    if create_code != 0:
+        payload["ok"] = False
+        payload["error"] = "Failed to create a temporary infobase from the historical configuration."
+        shutil.rmtree(ib_dir, ignore_errors=True)
+        return json_result(payload)
+
+    list_file = work / "extract-objects.txt"
+    write_list_file(canon, list_file)
+    dump_log = work / "extract-dump.out"
+    dump_args = [
+        onec_bin,
+        "DESIGNER",
+        "/F",
+        str(ib_dir),
+        "/DisableStartupDialogs",
+        "/Out",
+        str(dump_log),
+        "/DumpConfigToFiles",
+        str(extracted),
+        "-listFile",
+        str(list_file),
+        "-Format",
+        "Hierarchical",
+    ]
+    dump_code, dump_text = _run_local_onec(dump_args, dump_log)
+    payload["extractLogTail"] = "\n".join(dump_text.splitlines()[-40:])
+    payload["extractDir"] = str(extracted)
+    payload["extractedPaths"] = sorted(
+        str(path.relative_to(extracted)).replace("\\", "/")
+        for path in extracted.rglob("*")
+        if path.is_file()
+    )
+    payload["objects"] = canon
+    if dump_code != 0 or not payload["extractedPaths"]:
+        payload["ok"] = False
+        payload["error"] = "Historical configuration exported, but object extraction failed."
+    shutil.rmtree(ib_dir, ignore_errors=True)
+    if not keep_configuration and payload.get("ok"):
+        out.unlink(missing_ok=True)
+        payload["configurationExists"] = False
+        payload["configurationKept"] = False
+    else:
+        payload["configurationKept"] = out.is_file()
     return json_result(payload)
 
 

@@ -1,4 +1,4 @@
-"""WORK pipeline gates: storage_get aligned marker, lock receipt, staging HMAC."""
+"""WORK pipeline gates: exact locks, receipts, queues and staging HMAC."""
 
 from __future__ import annotations
 
@@ -398,6 +398,7 @@ def write_aligned_marker(
     *,
     target: str = "work",
     extension: str | None = None,
+    task: str | None = None,
 ) -> Path:
     canon = _norm_objects(objects)
     ts = time.time()
@@ -411,6 +412,7 @@ def write_aligned_marker(
                     "extension": extension,
                     "objects": [obj],
                     "entire": False,
+                    "task": (task or "").strip() or None,
                     "ts": ts,
                 },
                 ensure_ascii=False,
@@ -420,7 +422,8 @@ def write_aligned_marker(
         )
     bundle = _gates_root() / f"aligned_{_key(target, extension)}.json"
     prev = _read_gate(bundle) or {}
-    have = set(_norm_objects(list(prev.get("objects") or [])))
+    same_task = (prev.get("task") or None) == ((task or "").strip() or None)
+    have = set(_norm_objects(list(prev.get("objects") or []))) if same_task else set()
     have.update(canon)
     merged = sorted(have)
     entire = bool(prev.get("entire")) and not canon
@@ -432,6 +435,7 @@ def write_aligned_marker(
                 "extension": extension,
                 "objects": merged,
                 "entire": entire,
+                "task": (task or "").strip() or None,
                 "ts": ts,
             },
             ensure_ascii=False,
@@ -447,6 +451,7 @@ def write_lock_receipt(
     *,
     target: str = "work",
     extension: str | None = None,
+    task: str | None = None,
 ) -> Path:
     canon = _norm_objects(objects)
     ts = time.time()
@@ -460,6 +465,7 @@ def write_lock_receipt(
                     "extension": extension,
                     "objects": [obj],
                     "entire": False,
+                    "task": (task or "").strip() or None,
                     "ts": ts,
                 },
                 ensure_ascii=False,
@@ -469,7 +475,8 @@ def write_lock_receipt(
         )
     bundle = _gates_root() / f"lock_{_key(target, extension)}.json"
     prev = _read_gate(bundle) or {}
-    have = set(_norm_objects(list(prev.get("objects") or [])))
+    same_task = (prev.get("task") or None) == ((task or "").strip() or None)
+    have = set(_norm_objects(list(prev.get("objects") or []))) if same_task else set()
     have.update(canon)
     merged = sorted(have)
     entire = bool(prev.get("entire")) and not canon
@@ -481,6 +488,7 @@ def write_lock_receipt(
                 "extension": extension,
                 "objects": merged,
                 "entire": entire,
+                "task": (task or "").strip() or None,
                 "ts": ts,
             },
             ensure_ascii=False,
@@ -491,12 +499,20 @@ def write_lock_receipt(
     return bundle
 
 
-def _object_covered(kind: str, obj: str, *, target: str, extension: str | None) -> bool:
+def _object_covered(
+    kind: str,
+    obj: str,
+    *,
+    target: str,
+    extension: str | None,
+    task: str | None = None,
+) -> bool:
     path = _object_marker_path(kind, target, extension, obj)
     data = _read_gate(path)
     if data and data.get("kind") in ("storage_aligned", "storage_lock_receipt"):
         age = time.time() - float(data.get("ts") or 0)
-        if age <= _ttl_sec():
+        task_matches = task is None or (data.get("task") or "") == (task or "").strip()
+        if age <= _ttl_sec() and task_matches:
             return True
     bundle = _gates_root() / f"{kind}_{_key(target, extension)}.json"
     data = _read_gate(bundle)
@@ -505,16 +521,27 @@ def _object_covered(kind: str, obj: str, *, target: str, extension: str | None) 
     age = time.time() - float(data.get("ts") or 0)
     if age > _ttl_sec():
         return False
+    if task is not None and (data.get("task") or "") != (task or "").strip():
+        return False
     return _covers(list(data.get("objects") or []), bool(data.get("entire")), [obj])
 
 
-def objects_covered_by_lock(objects: list[str], *, target: str, extension: str | None) -> bool:
+def objects_covered_by_lock(
+    objects: list[str],
+    *,
+    target: str,
+    extension: str | None,
+    task: str | None = None,
+) -> bool:
     needed = _norm_objects(objects)
     if not needed:
         bundle = _gates_root() / f"lock_{_key(target, extension)}.json"
         data = _read_gate(bundle)
         return bool(data and data.get("entire"))
-    return all(_object_covered("lock", obj, target=target, extension=extension) for obj in needed)
+    return all(
+        _object_covered("lock", obj, target=target, extension=extension, task=task)
+        for obj in needed
+    )
 
 
 def refuse_get_captured(
@@ -552,33 +579,36 @@ def check_storage_aligned(
     target: str,
     extension: str | None,
     storage_aligned: bool,
+    task: str | None = None,
 ) -> dict[str, Any] | None:
     """Return error dict if WORK load must refuse; None if OK.
 
-    Already-captured objects do not need a fresh storage_get (incident 5359).
+    Lock receipts never substitute for an aligned marker (incident 1359 / v1194).
     """
-    if objects_covered_by_lock(objects, target=target, extension=extension):
-        return None
     if not storage_aligned:
         return {
             "ok": False,
             "error": "Refusing WORK load without storage_aligned=true.",
             "step": "storage_get_then_aligned",
             "hint": (
-                "If already captured: dump from WORK, then load with storage_captured=true "
-                "(no Get). Else storage_get first."
+                "Legacy alignment gate: automated WORK must use exact storage_lock, "
+                "then take a new locked dump."
             ),
             "stop": True,
         }
     needed = _norm_objects(objects)
     missing = [
-        obj for obj in needed if not _object_covered("aligned", obj, target=target, extension=extension)
+        obj
+        for obj in needed
+        if not _object_covered(
+            "aligned", obj, target=target, extension=extension, task=task
+        )
     ]
     if missing:
         return {
             "ok": False,
-            "error": "No storage_aligned marker for all load objects. Run storage_get first (if not captured).",
-            "step": "storage_get_then_aligned",
+            "error": "No legacy storage_aligned marker. Use exact storage_lock and a new dump.",
+            "step": "use_storage_lock",
             "needed": missing,
             "stop": True,
         }
@@ -591,6 +621,7 @@ def check_lock_receipt(
     target: str,
     extension: str | None,
     storage_captured: bool,
+    task: str | None = None,
 ) -> dict[str, Any] | None:
     if not storage_captured:
         return {
@@ -599,7 +630,9 @@ def check_lock_receipt(
             "step": "capture_then_approve",
             "stop": True,
         }
-    if objects_covered_by_lock(objects, target=target, extension=extension):
+    if objects_covered_by_lock(
+        objects, target=target, extension=extension, task=task
+    ):
         return None
     path = _gates_root() / f"lock_{_key(target, extension)}.json"
     return {
@@ -645,7 +678,7 @@ def acquire_object_locks(
     extension: str | None,
     tool: str = "",
 ) -> dict[str, Any] | None:
-    """Queue per object: same task+same PID re-enters; other PID/task waits."""
+    """Queue per object: one task may hand off between MCP processes; other tasks wait."""
     if not _is_work(target):
         return None
     task_s = (task or "").strip()
@@ -663,12 +696,12 @@ def acquire_object_locks(
             data = _read_gate(path)
             if data:
                 other = str(data.get("task") or "").strip()
-                holder_pid = int(data.get("pid") or 0)
                 same_task = other == task_s
-                same_holder = holder_pid == my_pid
-                # Same agent (same PID) may re-enter dump→lock→load.
-                # Another process with the same task= must wait (no dual dump_1359).
-                if same_task and same_holder:
+                # dump/storage/load are separate stdio processes. The exact task
+                # may hand off the queue; signed sourceDir receipts invalidate
+                # an older concurrent dump from the same task.
+                if same_task:
+                    data["pid"] = my_pid
                     data["ts"] = now
                     data["tool"] = tool or data.get("tool")
                     path.write_text(
@@ -676,32 +709,6 @@ def acquire_object_locks(
                         encoding="utf-8",
                     )
                     break
-                if same_task and not same_holder and not _object_lock_stale(data, now=now, ttl=ttl):
-                    if now >= deadline:
-                        return {
-                            "ok": False,
-                            "error": (
-                                "Object held by another process with the same task "
-                                f"(wait timed out after {wait_sec}s)."
-                            ),
-                            "step": "object_held_by_other_task",
-                            "held": [
-                                {
-                                    "object": obj,
-                                    "task": other,
-                                    "pid": holder_pid,
-                                    "tool": data.get("tool"),
-                                }
-                            ],
-                            "task": task_s,
-                            "hint": (
-                                "Same task= from another PID — wait; do not parallel dump/load. "
-                                "One agent pipeline only."
-                            ),
-                            "stop": True,
-                        }
-                    time.sleep(poll)
-                    continue
                 if (not same_task) and not _object_lock_stale(data, now=now, ttl=ttl):
                     if now >= deadline:
                         return {
@@ -817,8 +824,6 @@ def dirty_paths_vs_git(dest_dir: Path, rel_paths: list[str]) -> list[str]:
         if name in _SKIP_DIRTY:
             continue
         dest = dest_dir / rel.replace("/", os.sep)
-        if not dest.is_file():
-            continue
         try:
             rel_to_root = dest.resolve().relative_to(root)
         except ValueError:
@@ -874,11 +879,6 @@ def stash_dirty_paths(dest_dir: Path, dirty: list[str]) -> Path:
     manifest: list[dict[str, str]] = []
     for posix in dirty:
         abs_path = root / posix.replace("/", os.sep)
-        if not abs_path.is_file():
-            continue
-        dest = stash_dir / posix.replace("/", os.sep)
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_bytes(abs_path.read_bytes())
         tracked = subprocess.run(
             ["git", "-C", str(root), "ls-files", "--error-unmatch", "--", posix],
             capture_output=True,
@@ -888,6 +888,13 @@ def stash_dirty_paths(dest_dir: Path, dirty: list[str]) -> Path:
             timeout=30,
         )
         if tracked.returncode == 0:
+            if abs_path.is_file():
+                dest = stash_dir / posix.replace("/", os.sep)
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(abs_path.read_bytes())
+                kind = "tracked"
+            else:
+                kind = "tracked_deleted"
             checkout = subprocess.run(
                 ["git", "-C", str(root), "checkout", "HEAD", "--", posix],
                 capture_output=True,
@@ -900,8 +907,12 @@ def stash_dirty_paths(dest_dir: Path, dirty: list[str]) -> Path:
                 raise RuntimeError(
                     f"git checkout HEAD failed for {posix}: {checkout.stderr or checkout.stdout}"
                 )
-            kind = "tracked"
         else:
+            if not abs_path.is_file():
+                continue
+            dest = stash_dir / posix.replace("/", os.sep)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(abs_path.read_bytes())
             abs_path.unlink()
             kind = "untracked"
         manifest.append({"path": posix, "kind": kind})

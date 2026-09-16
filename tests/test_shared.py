@@ -381,15 +381,49 @@ def test_aligned_per_object_does_not_clobber(tmp_path: Path, monkeypatch: pytest
     assert wg.check_storage_aligned(["CommonModule.B"], target="work", extension="Эстет", storage_aligned=True) is None
 
 
-def test_lock_skips_get_aligned(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_lock_does_not_substitute_for_get_alignment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from onec_mcp_shared import work_gates as wg
 
     monkeypatch.setenv("DUMP_TMP_ROOT", str(tmp_path))
     objs = ["CommonModule.ПроизводствоБезЗаказаЛокализация"]
     wg.write_lock_receipt(objs, target="work", extension="Эстет")
-    assert wg.check_storage_aligned(objs, target="work", extension="Эстет", storage_aligned=False) is None
+    assert (
+        wg.check_storage_aligned(
+            objs, target="work", extension="Эстет", storage_aligned=False
+        )
+        is not None
+    )
     assert wg.refuse_get_captured(objs, target="work", extension="Эстет") is not None
     assert wg.refuse_get_captured(objs, target="work", extension="Эстет", confirm_get_captured=True) is None
+
+
+def test_lock_receipt_is_task_bound(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from onec_mcp_shared import work_gates as wg
+
+    monkeypatch.setenv("DUMP_TMP_ROOT", str(tmp_path))
+    objs = ["Document.Эст_Выпуск.Form.ФормаДокумента"]
+    wg.write_lock_receipt(objs, target="work", extension=None, task="1359")
+
+    assert (
+        wg.check_lock_receipt(
+            objs,
+            target="work",
+            extension=None,
+            storage_captured=True,
+            task="1359",
+        )
+        is None
+    )
+    assert (
+        wg.check_lock_receipt(
+            objs,
+            target="work",
+            extension=None,
+            storage_captured=True,
+            task="restore-1194",
+        )
+        is not None
+    )
 
 
 def test_object_lock_queues_then_acquires(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -424,27 +458,26 @@ def test_object_lock_same_task_reenters(tmp_path: Path, monkeypatch: pytest.Monk
     wg.release_object_locks(objs, task="5359", target="work", extension="e")
 
 
-def test_object_lock_same_task_other_pid_waits(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_object_lock_same_task_hands_off_between_mcp_processes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     from onec_mcp_shared import work_gates as wg
 
     monkeypatch.setenv("DUMP_TMP_ROOT", str(tmp_path))
-    monkeypatch.setenv("MCP_OBJECT_LOCK_WAIT_SEC", "1")
     monkeypatch.setenv("MCP_OBJECT_LOCK_TTL_SEC", "1800")
     objs = ["CommonModule.Bar"]
     assert wg.acquire_object_locks(objs, task="1359", target="work", extension="e") is None
-    # Simulate another process holding same task=
+    # dump/storage/load are separate stdio processes for the same task.
     path = wg._object_lock_path("work", "e", "CommonModule.Bar")
     data = wg._read_gate(path)
     assert data is not None
     data["pid"] = 1  # other holder
     monkeypatch.setattr(wg, "_pid_alive", lambda pid: True)
     path.write_text(__import__("json").dumps(data), encoding="utf-8")
-    err = wg.acquire_object_locks(objs, task="1359", target="work", extension="e")
-    assert err is not None
-    assert err["step"] == "object_held_by_other_task"
-    # cleanup: rewrite our pid then release
-    data["pid"] = __import__("os").getpid()
-    path.write_text(__import__("json").dumps(data), encoding="utf-8")
+    assert wg.acquire_object_locks(objs, task="1359", target="work", extension="e") is None
+    updated = wg._read_gate(path)
+    assert updated is not None
+    assert updated["pid"] == __import__("os").getpid()
     wg.release_object_locks(objs, task="1359", target="work", extension="e")
 
 
@@ -595,3 +628,98 @@ def test_refuse_dirty_repo_auto_stash(tmp_path: Path, monkeypatch: pytest.Monkey
     assert tracked.read_text(encoding="utf-8") == "from-git\n"
     stash = Path(info["stashDir"])
     assert (stash / "Module.bsl").read_text(encoding="utf-8") == "local-patch-1346\n"
+
+
+def test_refuse_dirty_repo_stashes_tracked_deletion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    import json
+    import subprocess
+
+    from onec_mcp_shared import work_gates
+
+    repo = tmp_path / "repo"
+    dump = tmp_path / "dump"
+    repo.mkdir()
+    dump.mkdir()
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "t@t"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True)
+    tracked = repo / "Module.bsl"
+    tracked.write_text("from-git\n", encoding="utf-8")
+    subprocess.run(["git", "add", "Module.bsl"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "init"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    tracked.unlink()
+    (dump / "Module.bsl").write_text("from-ib-dump\n", encoding="utf-8")
+    gates = tmp_path / "gates"
+    gates.mkdir()
+    monkeypatch.setattr(work_gates, "_gates_root", lambda: gates)
+
+    info = work_gates.refuse_dirty_repo(dump, repo, auto_stash=True)
+
+    assert info is not None
+    assert info["step"] == "reapply_stash"
+    assert tracked.read_text(encoding="utf-8") == "from-git\n"
+    manifest = json.loads(
+        (Path(info["stashDir"]) / "manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest["files"] == [{"path": "Module.bsl", "kind": "tracked_deleted"}]
+
+
+def test_storage_dump_version_builds_exact_version_export(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    import importlib.util
+
+    monkeypatch.setenv("DUMP_TMP_ROOT", str(tmp_path / "storage"))
+    spec = importlib.util.spec_from_file_location(
+        "storage_server_test", ROOT / "packages" / "mcp-1c-storage" / "server.py"
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    calls: list[list[str]] = []
+
+    def fake_run(args, **_kwargs):
+        calls.append(list(args))
+        exported = Path(args[1])
+        exported.parent.mkdir(parents=True, exist_ok=True)
+        exported.write_bytes(b"historical-cf")
+        return {"ok": True}
+
+    monkeypatch.setattr(module, "_run_storage_op", fake_run)
+    out = tmp_path / "history" / "v1193.cf"
+    payload = json.loads(
+        module.storage_dump_version(
+            version=1193,
+            output_path=str(out),
+            keep_configuration=True,
+        )
+    )
+
+    assert payload["ok"] is True
+    assert payload["version"] == 1193
+    assert payload["configurationExists"] is True
+    assert calls == [["/ConfigurationRepositoryDumpCfg", str(out), "-v", "1193"]]
+
+
+def test_storage_dump_version_rejects_invalid_version(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    import importlib.util
+
+    monkeypatch.setenv("DUMP_TMP_ROOT", str(tmp_path / "storage"))
+    spec = importlib.util.spec_from_file_location(
+        "storage_server_invalid_test", ROOT / "packages" / "mcp-1c-storage" / "server.py"
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    payload = json.loads(module.storage_dump_version(version=0))
+    assert payload["ok"] is False
+    assert payload["stop"] is True

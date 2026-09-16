@@ -81,7 +81,7 @@ Agents must show that list and stop — never pretend success.
 - Also matches cmdline forms like `/IBName"Title"` (thin client / Designer variants).
 - After `force_close`, clears **stale** file-IB `.cfl` lock files when the IB process is gone.
 - WORK `load_objects`: MCP requires / auto-enables `manage_session` + `force_close` (`require_manage_session` if missing).
-- `reopen_designer`: default **False between** get/dump/lock/load; on the **last** successful WORK step after the agent closed Designer → **True**. Work reopen: `DESIGNER /IBName` + IB title (two argv) + IB user — not bare `/F`, not `/AppAutoCheckMode`, not one argv `/IBName"…"`. Do **not** re-pass `/ConfigurationRepository*` on interactive reopen (double auth → fail).
+- `reopen_designer`: default **False between** get/lock/dump/load/commit; on the final verified step after the agent closed Designer → **True**. Editable WORK source is always dumped **after** exact `storage_lock`; `load_objects` performs pre/post snapshots and `storage_commit` verifies tip. Work reopen: `DESIGNER /IBName` + IB title (two argv) + IB user — not bare `/F`, not `/AppAutoCheckMode`, not one argv `/IBName"…"`. Do **not** re-pass `/ConfigurationRepository*` on interactive reopen (double auth → fail).
 - Optional explicit storage CLI: set `ONEC_STORAGE_PATH` / `ONEC_STORAGE_USER` / `ONEC_STORAGE_PASSWORD`.
 - Never default-open Designer when no session was open on that IB; never reopen DEV for the user.
 - **Adopted UUID gate:** before prepare/load, `ExtendedConfigurationObject` in `REPO_CFE` must equal Attribute `uuid` in `REPO_CF` for the same attribute name. On mismatch → `ok=false`, step `fix_adopted_uuids`. New Adopted attrs require loading the **main** CF object, not only the extension.

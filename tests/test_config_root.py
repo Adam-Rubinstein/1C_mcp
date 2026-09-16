@@ -86,7 +86,8 @@ def _write_required_ext(root: Path) -> None:
         (ext / rel).write_text(f"<stub>{rel}</stub>", encoding="utf-8")
 
 
-def test_prepared_staging_ok(tmp_path: Path):
+def test_prepared_staging_ok(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("DUMP_TMP_ROOT", str(tmp_path))
     uid = "22222222-2222-2222-2222-222222222222"
     staging = tmp_path / "staging"
     staging.mkdir()

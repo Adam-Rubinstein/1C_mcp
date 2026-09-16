@@ -11,6 +11,7 @@ from onec_mcp_shared import (  # noqa: E402
     env,
     is_work_target,
     json_result,
+    list_dumped_paths,
     load_env_files,
     normalize_object_name,
     now_stamp,
@@ -37,11 +38,23 @@ from onec_mcp_shared.work_gates import (  # noqa: E402
     DesignerBusy,
     acquire_object_locks,
     check_lock_receipt,
-    check_storage_aligned,
     forms_incomplete_in_source,
     refuse_parent_object_without_confirm,
-    release_object_locks,
     require_work_task,
+)
+from onec_mcp_shared.work_integrity import (  # noqa: E402
+    IntegrityError,
+    build_structural_diff,
+    check_dump_receipt as check_integrity_dump_receipt,
+    check_pending_stash_receipt,
+    compare_current_snapshot,
+    compare_post_load_snapshot,
+    copy_object_files,
+    create_manifest_token,
+    hash_object_files,
+    read_dump_receipt,
+    verify_manifest_token,
+    write_load_receipt,
 )
 
 load_env_files(Path(__file__).with_name(".env"), Path.cwd() / ".env", Path(_ROOT).parent / ".env")
@@ -59,6 +72,46 @@ def _is_dev_target(target: str) -> bool:
 
 def _canon_objects(objects: list[str]) -> list[str]:
     return [normalize_object_name(o) for o in objects if (o or "").strip()]
+
+
+def _dump_integrity_snapshot(
+    *,
+    ib: str,
+    objects: list[str],
+    target: str,
+    extension: str | None,
+    snapshot_dir: Path,
+    force_close: bool,
+    reopen_designer: bool,
+):
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    list_file = snapshot_dir / "objects.txt"
+    write_list_file(objects, list_file)
+    args = ["/DumpConfigToFiles", str(snapshot_dir)]
+    if extension:
+        args.extend(["-Extension", extension])
+    args.extend(["-listFile", str(list_file), "-Format", "Hierarchical"])
+
+    def _do_snapshot():
+        return run_designer(
+            args,
+            work_dir=snapshot_dir,
+            objects=objects,
+            target=target,
+            attach_storage=True,
+            extension_storage=bool(extension),
+        )
+
+    result, session_meta = with_managed_session(
+        ib,
+        _do_snapshot,
+        force_close=force_close,
+        reopen=reopen_designer,
+        attach_storage=True,
+    )
+    result.dump_dir = str(snapshot_dir)
+    result.dumped_paths = list_dumped_paths(snapshot_dir)
+    return result, session_meta
 
 
 def _health_payload(verbose: bool = False) -> dict:
@@ -84,8 +137,8 @@ def _health_payload(verbose: bool = False) -> dict:
         ],
         "mcpLoadRev": env("MCP_LOAD_REV") or "8-storage-attach-work",
         "note": (
-            "Default target=dev. WORK needs confirm=true, storage_captured=true, "
-            "ONEC_STORAGE_PATH (attach). Prefer storage_get→dump→patch→storage_lock→load. "
+            "Default target=dev. WORK requires exact get?→lock→dump→patch→precheck→"
+            "load→post-dump and task-bound receipts. "
             "Never load Configuration.xml from git or without Ext/."
         ),
     }
@@ -467,10 +520,10 @@ def load_prepare_work(
         ext_name = extension
     lines = [
         "Перед загрузкой в WORK:",
-        "1) storage_get(objects) — обязателен (пишет aligned marker).",
-        "2) dump_objects(target=work) → точечный патч.",
-        "3) storage_lock(objects) — пишет lock receipt (или UI-захват + storage_lock).",
-        "4) load_objects(..., confirm=true, storage_aligned=true, storage_captured=true).",
+        "1) storage_lock(exact objects, task) — первый mutating шаг.",
+        "2) dump_objects(target=work, task) → locked baseline receipt.",
+        "3) точечный патч / reapply_stash three-way.",
+        "4) load_objects(..., integrity_receipt_id=...) → frozen precheck + post-dump.",
         "",
         "Захватить:",
         "",
@@ -484,9 +537,9 @@ def load_prepare_work(
     lines.extend(
         [
             "",
-            "Правильный порядок: storage_get → dump-from-work → точечный патч → storage_lock → load.",
-            "load_objects WORK: storage_aligned=true + storage_captured=true (маркеры от get/lock).",
-            "После захвата: «я захватил» / «делай». Поместить (storage_commit) — только по явной просьбе.",
+            "Правильный порядок: storage_lock → dump-from-work → патч → frozen load+verify.",
+            "Parent metadata object не покрывает Form; task/object/sourceDir должны совпадать.",
+            "storage_commit разрешён только после verified load receipt и явной просьбы.",
             "До подтверждения агент НЕ вызывает load_objects на WORK.",
         ]
     )
@@ -532,14 +585,18 @@ def load_objects(
     reopen_designer: bool | None = None,
     restart_even_on_fail: bool | None = None,
     task: str | None = None,
+    integrity_receipt_id: str | None = None,
+    confirm_foreign_deletions: bool = False,
+    deletion_manifest_token: str | None = None,
+    post_verify: bool = True,
 ) -> str:
-    """WORK: get→lock first; manage_session+force_close; last load reopen_designer=true. Never ask user to close Designer."""
+    """WORK load from an exact locked dump with pre/post integrity verification."""
     if not confirm:
         return json_result(
             {
                 "ok": False,
                 "error": "Refusing load without confirm=true.",
-                "hint": "WORK: storage_get → dump → patch → storage_lock → load with confirm, storage_aligned, storage_captured.",
+                "hint": "WORK: exact storage_lock → dump → patch → frozen load with integrity receipt.",
             }
         )
     if not objects:
@@ -627,26 +684,134 @@ def load_objects(
         )
         if held_err:
             return json_result(held_err)
-        aligned_err = check_storage_aligned(
-            canon,
-            target=t,
-            extension=ext_name_preview,
-            storage_aligned=storage_aligned,
-        )
-        if aligned_err:
-            aligned_err["objectsToCapture"] = canon
-            aligned_err["adoptCheck"] = adopt
-            return json_result(aligned_err)
         lock_err = check_lock_receipt(
             canon,
             target=t,
             extension=ext_name_preview,
             storage_captured=storage_captured,
+            task=task,
         )
         if lock_err:
             lock_err["objectsToCapture"] = canon
             lock_err["adoptCheck"] = adopt
             return json_result(lock_err)
+        if not post_verify:
+            return json_result(
+                {
+                    "ok": False,
+                    "error": "post_verify=false is forbidden for WORK load.",
+                    "step": "require_post_load_verify",
+                    "stop": True,
+                }
+            )
+        pending_err = check_pending_stash_receipt(
+            canon,
+            task=task or "",
+            target=t,
+            extension=ext_name_preview,
+        )
+        if pending_err:
+            pending_err["step"] = "refuse_pending_reapply"
+            return json_result(pending_err)
+        integrity_dump_err = check_integrity_dump_receipt(
+            canon,
+            task=task or "",
+            target=t,
+            extension=ext_name_preview,
+            source_dir=src_preview,
+        )
+        if integrity_dump_err:
+            integrity_dump_err["step"] = "require_locked_dump"
+            return json_result(integrity_dump_err)
+        dump_receipt = read_dump_receipt(
+            canon,
+            task=task or "",
+            target=t,
+            extension=ext_name_preview,
+        )
+        if dump_receipt is None:
+            return json_result(
+                {
+                    "ok": False,
+                    "error": "Signed dump receipt could not be read.",
+                    "step": "require_locked_dump",
+                    "stop": True,
+                }
+            )
+        if (
+            not integrity_receipt_id
+            or integrity_receipt_id != dump_receipt.get("receiptId")
+        ):
+            return json_result(
+                {
+                    "ok": False,
+                    "error": "integrity_receipt_id does not match the exact locked dump.",
+                    "step": "require_locked_dump",
+                    "expectedIntegrityReceiptId": dump_receipt.get("receiptId"),
+                    "stop": True,
+                }
+            )
+        try:
+            deletion_manifest = build_structural_diff(
+                dump_receipt["immutableBaselineDir"],
+                src_preview,
+                canon,
+            )
+        except (IntegrityError, OSError) as exc:
+            return json_result(
+                {
+                    "ok": False,
+                    "error": str(exc),
+                    "step": "integrity_precheck_failed",
+                    "stop": True,
+                }
+            )
+        if deletion_manifest.get("errors"):
+            return json_result(
+                {
+                    "ok": False,
+                    "error": "Structural diff contains parse/read errors.",
+                    "step": "integrity_precheck_failed",
+                    "deletionManifest": deletion_manifest,
+                    "stop": True,
+                }
+            )
+        if deletion_manifest.get("hasRemovals"):
+            manifest_token = create_manifest_token(deletion_manifest)
+            if (
+                not confirm_foreign_deletions
+                or not deletion_manifest_token
+            ):
+                return json_result(
+                    {
+                        "ok": False,
+                        "error": "Locked baseline content would be deleted.",
+                        "step": "refuse_foreign_deletion",
+                        "deletionManifest": deletion_manifest,
+                        "deletionManifestToken": manifest_token,
+                        "stop": True,
+                        "hint": (
+                            "Review every removal against the approved TZ. Retry only with "
+                            "confirm_foreign_deletions=true and this exact signed token."
+                        ),
+                    }
+                )
+            try:
+                verify_manifest_token(
+                    deletion_manifest_token,
+                    deletion_manifest,
+                )
+            except IntegrityError as exc:
+                return json_result(
+                    {
+                        "ok": False,
+                        "error": str(exc),
+                        "step": "refuse_foreign_deletion",
+                        "deletionManifest": deletion_manifest,
+                        "deletionManifestToken": manifest_token,
+                        "stop": True,
+                    }
+                )
         try:
             require_storage_path()
         except ValueError as exc:
@@ -695,11 +860,178 @@ def load_objects(
 
     work = Path(env("DUMP_TMP_ROOT", str(Path.cwd() / ".tmp" / "1c-load"))) / now_stamp()
     work.mkdir(parents=True, exist_ok=True)
+    load_source = src
+    candidate_hashes: dict[str, str] | None = None
+    pre_session_meta = None
+    if _is_work_target(t):
+        try:
+            candidate_hashes = hash_object_files(src, canon)
+        except (IntegrityError, OSError) as exc:
+            return json_result(
+                {
+                    "ok": False,
+                    "error": str(exc),
+                    "step": "integrity_candidate_hash_failed",
+                    "stop": True,
+                }
+            )
+        if not candidate_hashes:
+            return json_result(
+                {
+                    "ok": False,
+                    "error": "Candidate contains no files for the exact object list.",
+                    "step": "integrity_candidate_hash_failed",
+                    "stop": True,
+                }
+            )
+        pre_dir = work / "pre-load-snapshot"
+        try:
+            pre_result, pre_session_meta = _dump_integrity_snapshot(
+                ib=ib,
+                objects=canon,
+                target=target,
+                extension=ext_name,
+                snapshot_dir=pre_dir,
+                force_close=force_close,
+                reopen_designer=False,
+            )
+        except DesignerBusy as exc:
+            return json_result(exc.payload)
+        except Exception as exc:  # noqa: BLE001
+            return json_result(
+                {
+                    "ok": False,
+                    "error": str(exc),
+                    "step": "work_preload_snapshot_failed",
+                    "stop": True,
+                }
+            )
+        if not pre_result.to_dict().get("ok"):
+            return json_result(
+                {
+                    **pre_result.to_dict(),
+                    "ok": False,
+                    "step": "work_preload_snapshot_failed",
+                    "session": pre_session_meta,
+                    "stop": True,
+                }
+            )
+        try:
+            pre_hashes = hash_object_files(pre_dir, canon)
+        except (IntegrityError, OSError) as exc:
+            return json_result(
+                {
+                    "ok": False,
+                    "error": str(exc),
+                    "step": "work_preload_snapshot_failed",
+                    "session": pre_session_meta,
+                    "stop": True,
+                }
+            )
+        current_compare = compare_current_snapshot(
+            dump_receipt["baselineHashes"],
+            pre_hashes,
+        )
+        if not current_compare.get("ok"):
+            return json_result(
+                {
+                    "ok": False,
+                    "error": "WORK changed after the locked baseline dump.",
+                    "step": "work_changed_since_dump",
+                    "currentWorkCompare": current_compare,
+                    "preLoadSnapshotDir": str(pre_dir),
+                    "session": pre_session_meta,
+                    "stop": True,
+                    "hint": "Take a new locked dump and rebase the patch. Do not overwrite WORK.",
+                }
+            )
+        receipt_recheck = check_integrity_dump_receipt(
+            canon,
+            task=task or "",
+            target=t,
+            extension=ext_name,
+            source_dir=src,
+        )
+        latest_dump_receipt = read_dump_receipt(
+            canon,
+            task=task or "",
+            target=t,
+            extension=ext_name,
+        )
+        if (
+            receipt_recheck
+            or latest_dump_receipt is None
+            or latest_dump_receipt.get("receiptId") != integrity_receipt_id
+        ):
+            return json_result(
+                {
+                    "ok": False,
+                    "error": "Locked dump receipt changed during pre-load verification.",
+                    "step": "require_locked_dump",
+                    "receiptError": receipt_recheck,
+                    "stop": True,
+                }
+            )
+        try:
+            candidate_recheck = compare_post_load_snapshot(
+                candidate_hashes,
+                hash_object_files(src, canon),
+            )
+        except (IntegrityError, OSError) as exc:
+            return json_result(
+                {
+                    "ok": False,
+                    "error": str(exc),
+                    "step": "candidate_changed_during_precheck",
+                    "stop": True,
+                }
+            )
+        if not candidate_recheck.get("ok"):
+            return json_result(
+                {
+                    "ok": False,
+                    "error": "Candidate source changed during pre-load verification.",
+                    "step": "candidate_changed_during_precheck",
+                    "candidateCompare": candidate_recheck,
+                    "stop": True,
+                }
+            )
+        frozen_source = work / "frozen-load-source"
+        try:
+            frozen_hashes = copy_object_files(
+                src,
+                canon,
+                frozen_source,
+            )
+        except (IntegrityError, OSError) as exc:
+            return json_result(
+                {
+                    "ok": False,
+                    "error": str(exc),
+                    "step": "freeze_load_source_failed",
+                    "stop": True,
+                }
+            )
+        frozen_compare = compare_post_load_snapshot(
+            candidate_hashes,
+            frozen_hashes,
+        )
+        if not frozen_compare.get("ok"):
+            return json_result(
+                {
+                    "ok": False,
+                    "error": "Frozen load source does not match the verified candidate.",
+                    "step": "freeze_load_source_failed",
+                    "frozenSourceCompare": frozen_compare,
+                    "stop": True,
+                }
+            )
+        load_source = frozen_source
     list_file = work / "objects.txt"
     canon = _canon_objects(objects)
     write_list_file(canon, list_file, for_load=True)
 
-    args = ["/LoadConfigFromFiles", str(src)]
+    args = ["/LoadConfigFromFiles", str(load_source)]
     if ext_name:
         args.extend(["-Extension", ext_name])
     args.extend(["-listFile", str(list_file), "-Format", "Hierarchical"])
@@ -717,13 +1049,16 @@ def load_objects(
         )
 
     session_meta = None
+    load_reopen_designer = (
+        False if _is_work_target(t) and post_verify else bool(reopen_designer)
+    )
     try:
         if manage_session:
             result, session_meta = with_managed_session(
                 ib,
                 _do_load,
                 force_close=force_close,
-                reopen=reopen_designer,
+                reopen=load_reopen_designer,
                 restart_even_on_fail=restart_even_on_fail,
                 attach_storage=attach or None,
             )
@@ -737,13 +1072,15 @@ def load_objects(
     payload = result.to_dict()
     payload["ib"] = ib
     payload["target"] = target
+    if _is_work_target(t):
+        payload["frozenLoadSourceDir"] = str(load_source)
     if session_meta:
         payload["session"] = session_meta
     if result.objects_to_get:
         payload["message"] = (
             "Need get from storage: "
             + ", ".join(result.objects_to_get)
-            + ". Use storage_get; do not Put blindly."
+            + ". Do not run storage_get in WORK; repeat exact storage_lock, then take a new dump."
         )
         payload["objectsToGet"] = result.objects_to_get
         payload["ok"] = False
@@ -767,20 +1104,86 @@ def load_objects(
         payload["ok"] = True
         payload["message"] = "Load finished. If metadata structure changed, update database configuration in Designer."
         if _is_work_target(t):
-            payload["warning"] = (
-                "WORK load done with storage attached. "
-                "Do not storage_commit unless user explicitly asked; compare first."
-            )
-            # Free object queue so the next task can dump from WORK and continue.
-            release_object_locks(
-                canon,
-                task=task,
-                target=t,
-                extension=ext_name,
-            )
-    if session_meta and session_meta.get("userAction"):
+            post_dir = work / "post-load-snapshot"
+            post_session_meta = None
+            try:
+                post_result, post_session_meta = _dump_integrity_snapshot(
+                    ib=ib,
+                    objects=canon,
+                    target=target,
+                    extension=ext_name,
+                    snapshot_dir=post_dir,
+                    force_close=force_close,
+                    reopen_designer=bool(reopen_designer),
+                )
+            except DesignerBusy as exc:
+                payload.update(exc.payload)
+                payload["ok"] = False
+                payload["step"] = "post_load_snapshot_failed"
+                post_result = None
+            except Exception as exc:  # noqa: BLE001
+                payload["ok"] = False
+                payload["error"] = str(exc)
+                payload["step"] = "post_load_snapshot_failed"
+                post_result = None
+
+            if post_result is not None and not post_result.to_dict().get("ok"):
+                payload["ok"] = False
+                payload["step"] = "post_load_snapshot_failed"
+                payload["postLoadResult"] = post_result.to_dict()
+            elif post_result is not None:
+                try:
+                    post_hashes = hash_object_files(post_dir, canon)
+                except (IntegrityError, OSError) as exc:
+                    payload["ok"] = False
+                    payload["error"] = str(exc)
+                    payload["step"] = "post_load_snapshot_failed"
+                else:
+                    post_compare = compare_post_load_snapshot(
+                        candidate_hashes or {},
+                        post_hashes,
+                    )
+                    payload["postLoadSnapshotDir"] = str(post_dir)
+                    payload["postLoadCompare"] = post_compare
+                    if not post_compare.get("ok"):
+                        payload["ok"] = False
+                        payload["error"] = (
+                            "Post-load WORK snapshot does not match the exact source."
+                        )
+                        payload["step"] = "post_load_regression"
+                        payload["stop"] = True
+                    else:
+                        try:
+                            load_receipt_path = write_load_receipt(
+                                canon,
+                                task=task or "",
+                                target=t,
+                                extension=ext_name,
+                                verified_hashes=post_hashes,
+                                post_load_snapshot_dir=post_dir,
+                            )
+                        except (IntegrityError, OSError) as exc:
+                            payload["ok"] = False
+                            payload["error"] = str(exc)
+                            payload["step"] = "write_load_integrity_receipt"
+                            payload["stop"] = True
+                        else:
+                            payload["integrityLoadReceiptId"] = load_receipt_path.name
+                            payload["integrityLoadReceipt"] = str(load_receipt_path)
+                            payload["warning"] = (
+                                "WORK source and post-load dump match. Keep the object queue "
+                                "until verified storage_commit or storage_unlock."
+                            )
+                            payload["message"] = (
+                                "WORK load and post-load integrity verification finished."
+                            )
+            if post_session_meta:
+                payload["postLoadSession"] = post_session_meta
+                if post_session_meta.get("userAction"):
+                    payload["userAction"] = post_session_meta["userAction"]
+    if session_meta and session_meta.get("userAction") and not payload.get("userAction"):
         payload["userAction"] = session_meta["userAction"]
-    if session_meta and session_meta.get("warning"):
+    if session_meta and session_meta.get("warning") and not payload.get("sessionWarning"):
         payload["sessionWarning"] = session_meta["warning"]
     return json_result(payload)
 
