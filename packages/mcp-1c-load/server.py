@@ -50,10 +50,10 @@ from onec_mcp_shared.work_integrity import (  # noqa: E402
     compare_current_snapshot,
     compare_post_load_snapshot,
     copy_object_files,
-    create_manifest_token,
+    create_manifest_confirmation_token,
     hash_object_files,
     read_dump_receipt,
-    verify_manifest_token,
+    verify_manifest_confirmation_token,
     write_load_receipt,
 )
 
@@ -777,7 +777,7 @@ def load_objects(
                 }
             )
         if deletion_manifest.get("hasRemovals"):
-            manifest_token = create_manifest_token(deletion_manifest)
+            manifest_token = create_manifest_confirmation_token(deletion_manifest)
             if (
                 not confirm_foreign_deletions
                 or not deletion_manifest_token
@@ -797,7 +797,7 @@ def load_objects(
                     }
                 )
             try:
-                verify_manifest_token(
+                verify_manifest_confirmation_token(
                     deletion_manifest_token,
                     deletion_manifest,
                 )

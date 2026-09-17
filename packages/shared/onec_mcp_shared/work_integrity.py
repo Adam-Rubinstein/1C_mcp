@@ -658,6 +658,43 @@ def verify_manifest_token(
     return decoded
 
 
+def create_manifest_confirmation_token(manifest: Mapping[str, Any]) -> str:
+    """Return a short HMAC token bound to the exact expected manifest."""
+
+    digest = hashlib.sha256(_canonical_json(manifest)).digest()
+    signature = hmac.new(
+        staging_secret(),
+        b"onec-mcp-manifest-confirmation-v1\x00" + digest,
+        hashlib.sha256,
+    ).digest()
+    return f"c1.{_b64_encode(digest)}.{_b64_encode(signature)}"
+
+
+def verify_manifest_confirmation_token(
+    token: str,
+    expected_manifest: Mapping[str, Any],
+) -> None:
+    """Verify a short token against a freshly calculated manifest."""
+
+    if not isinstance(token, str):
+        raise IntegrityError("manifest confirmation token must be a string")
+    parts = token.split(".")
+    if len(parts) != 3 or parts[0] != "c1":
+        raise IntegrityError("unsupported manifest confirmation token")
+    supplied_digest = _b64_decode(parts[1])
+    supplied_signature = _b64_decode(parts[2])
+    expected_digest = hashlib.sha256(_canonical_json(expected_manifest)).digest()
+    if not hmac.compare_digest(supplied_digest, expected_digest):
+        raise IntegrityError("manifest confirmation token does not match the expected manifest")
+    expected_signature = hmac.new(
+        staging_secret(),
+        b"onec-mcp-manifest-confirmation-v1\x00" + expected_digest,
+        hashlib.sha256,
+    ).digest()
+    if not hmac.compare_digest(supplied_signature, expected_signature):
+        raise IntegrityError("manifest confirmation token signature is invalid")
+
+
 def sign_manifest(manifest: Mapping[str, Any]) -> str:
     """Compatibility name for creating a signed manifest token."""
 
@@ -1599,6 +1636,7 @@ __all__ = [
     "compare_object_snapshot",
     "compare_post_load_snapshot",
     "copy_object_files",
+    "create_manifest_confirmation_token",
     "create_manifest_token",
     "hash_object_files",
     "normalize_objects",
@@ -1609,6 +1647,7 @@ __all__ = [
     "sign_manifest",
     "structural_diff",
     "verify_manifest",
+    "verify_manifest_confirmation_token",
     "verify_manifest_token",
     "write_dump_receipt",
     "write_load_receipt",

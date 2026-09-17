@@ -254,6 +254,25 @@ def test_manifest_token_rejects_tampering(
         wi.verify_manifest_token(token)
 
 
+def test_manifest_confirmation_token_is_short_and_exact() -> None:
+    manifest = {
+        "objects": ["Document.X.Form.Y"],
+        "removedExecutableLines": [
+            {"path": "Module.bsl", "line": number, "hash": f"hash-{number}"}
+            for number in range(500)
+        ],
+    }
+    token = wi.create_manifest_confirmation_token(manifest)
+
+    assert len(token) < 100
+    wi.verify_manifest_confirmation_token(token, manifest)
+    with pytest.raises(wi.IntegrityError):
+        wi.verify_manifest_confirmation_token(
+            token,
+            {**manifest, "objects": ["Document.X.Form.Other"]},
+        )
+
+
 def test_receipts_require_exact_objects_and_task(tmp_path: Path) -> None:
     objects = ["Document.B", "CommonModule.A"]
     wi.write_lock_receipt(
