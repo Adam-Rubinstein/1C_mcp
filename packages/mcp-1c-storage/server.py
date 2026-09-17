@@ -1100,14 +1100,13 @@ def storage_dump_version(
     if ib_dir.exists():
         shutil.rmtree(ib_dir, ignore_errors=True)
     create_log = work / "extract-create.out"
-    connection = f'File="{ib_dir}";'
+    connection = f"File={ib_dir};"
     create_args = [
         onec_bin,
         "CREATEINFOBASE",
         connection,
         "/UseTemplate",
         str(out),
-        "/AddInListN",
         "/DisableStartupDialogs",
         "/Out",
         str(create_log),
@@ -1119,7 +1118,6 @@ def storage_dump_version(
             onec_bin,
             "CREATEINFOBASE",
             connection,
-            "/AddInListN",
             "/DisableStartupDialogs",
             "/Out",
             str(create_log),

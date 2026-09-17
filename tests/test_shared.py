@@ -709,6 +709,79 @@ def test_storage_dump_version_builds_exact_version_export(
     assert calls == [["/ConfigurationRepositoryDumpCfg", str(out), "-v", "1193"]]
 
 
+def test_storage_dump_version_extracts_with_valid_file_connection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    import importlib.util
+
+    storage_root = tmp_path / "storage"
+    onec_bin = tmp_path / "1cv8.exe"
+    onec_bin.write_bytes(b"test")
+    monkeypatch.setenv("DUMP_TMP_ROOT", str(storage_root))
+    monkeypatch.setenv("ONEC_BIN", str(onec_bin))
+    spec = importlib.util.spec_from_file_location(
+        "storage_server_extract_test", ROOT / "packages" / "mcp-1c-storage" / "server.py"
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    storage_calls: list[list[str]] = []
+    onec_calls: list[list[str]] = []
+
+    def fake_storage_run(args, **_kwargs):
+        storage_calls.append(list(args))
+        exported = Path(args[1])
+        exported.parent.mkdir(parents=True, exist_ok=True)
+        exported.write_bytes(b"historical-cf")
+        return {"ok": True}
+
+    def fake_local_onec(args, _log):
+        onec_calls.append(list(args))
+        if "CREATEINFOBASE" in args:
+            connection = args[2]
+            ib_dir = Path(connection.removeprefix("File=").removesuffix(";"))
+            ib_dir.mkdir(parents=True, exist_ok=True)
+            (ib_dir / "1Cv8.1CD").write_bytes(b"test")
+        if "/DumpConfigToFiles" in args:
+            extracted = Path(args[args.index("/DumpConfigToFiles") + 1])
+            module_path = (
+                extracted
+                / "Documents"
+                / "Эст_Выпуск"
+                / "Forms"
+                / "ФормаДокумента"
+                / "Ext"
+                / "Form"
+                / "Module.bsl"
+            )
+            module_path.parent.mkdir(parents=True, exist_ok=True)
+            module_path.write_text("Процедура Тест()\nКонецПроцедуры\n", encoding="utf-8")
+        return 0, ""
+
+    monkeypatch.setattr(module, "_run_storage_op", fake_storage_run)
+    monkeypatch.setattr(module, "_run_local_onec", fake_local_onec)
+    out = tmp_path / "history" / "v1193.cf"
+    extracted = tmp_path / "history" / "v1193"
+    payload = json.loads(
+        module.storage_dump_version(
+            version=1193,
+            output_path=str(out),
+            objects=["Document.Эст_Выпуск.Form.ФормаДокумента"],
+            extract_dir=str(extracted),
+            keep_configuration=True,
+        )
+    )
+
+    assert payload["ok"] is True
+    assert storage_calls == [["/ConfigurationRepositoryDumpCfg", str(out), "-v", "1193"]]
+    create_args = next(args for args in onec_calls if "CREATEINFOBASE" in args)
+    assert create_args[2].startswith("File=")
+    assert create_args[2].endswith(";")
+    assert '"' not in create_args[2]
+    assert "/AddInListN" not in create_args
+
+
 def test_storage_dump_version_rejects_invalid_version(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     import importlib.util
 
