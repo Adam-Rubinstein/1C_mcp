@@ -42,6 +42,13 @@ def main() -> int:
     logs = ROOT / ".tmp" / "logs"
     logs.mkdir(parents=True, exist_ok=True)
     pids: list[int] = []
+    processes: list[tuple[str, subprocess.Popen[bytes], object, object]] = []
+    creationflags = (
+        subprocess.CREATE_NEW_PROCESS_GROUP
+        | subprocess.DETACHED_PROCESS
+        | getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+        | getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0x01000000)
+    ) if sys.platform == "win32" else 0
     for name, port in SERVICES:
         env = os.environ.copy()
         env["MCP_TRANSPORT"] = "sse"
@@ -55,18 +62,23 @@ def main() -> int:
             env=env,
             stdout=out,
             stderr=err,
-            creationflags=(
-            subprocess.CREATE_NEW_PROCESS_GROUP
-            | subprocess.DETACHED_PROCESS
-            | getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
-        )
-        if sys.platform == "win32"
-        else 0,
+            creationflags=creationflags,
         )
         pids.append(proc.pid)
+        processes.append((name, proc, out, err))
         print(f"started {name} pid={proc.pid} port={port}")
     (logs / "pids.txt").write_text("\n".join(str(p) for p in pids), encoding="utf-8")
-    time.sleep(1)
+    time.sleep(2)
+    failed: list[str] = []
+    for name, proc, out, err in processes:
+        out.close()
+        err.close()
+        code = proc.poll()
+        if code is not None:
+            failed.append(f"{name} exited with code {code}")
+    if failed:
+        print("; ".join(failed), file=sys.stderr)
+        return 1
     return 0
 
 
