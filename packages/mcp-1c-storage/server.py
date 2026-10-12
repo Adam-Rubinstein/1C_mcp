@@ -254,7 +254,9 @@ def storage_status() -> str:
                 "storage_status",
             ],
             "note": (
-                "WORK storage_get is forbidden; exact lock is the first mutating step. "
+                "WORK storage_get of an object list is forbidden; exact lock is the first mutating step. "
+                "Full UpdateCfg (entire_config + confirm_entire) is the menu command "
+                "Обновить конфигурацию из хранилища. "
                 "storage_commit requires task-bound verified load, "
                 "confirm=true and user-approved comment."
             ),
@@ -321,24 +323,30 @@ def storage_get(
     confirm_get_captured: bool = False,
 ) -> str:
     """Get from storage. WORK: task=; auto force_close. On busy retry; never ask user to close Designer."""
-    if (target or "").strip().lower() in ("work", "prod", "base3"):
+    is_work = (target or "").strip().lower() in ("work", "prod", "base3")
+    # Menu item «Обновить конфигурацию из хранилища»: UpdateCfg of the whole configuration.
+    # An object list stays forbidden on WORK (captured-object wipe, 5359 / 1194).
+    full_update = bool(entire_config and confirm_entire)
+    if is_work and not full_update:
         return json_result(
             {
                 "ok": False,
                 "error": (
-                    "storage_get is forbidden in the automated WORK edit pipeline. "
-                    "Use exact storage_lock first; it aligns an uncaptured object before the locked dump."
+                    "storage_get of an object list is forbidden in the automated WORK edit pipeline. "
+                    "Use exact storage_lock first; it aligns an uncaptured object before the locked dump. "
+                    "Full update from storage requires entire_config=true and confirm_entire=true."
                 ),
                 "step": "use_storage_lock",
                 "stop": True,
             }
         )
-    entire_work_error = _refuse_entire_work(
-        target=target,
-        entire_config=entire_config,
-    )
-    if entire_work_error:
-        return entire_work_error
+    if not full_update:
+        entire_work_error = _refuse_entire_work(
+            target=target,
+            entire_config=entire_config,
+        )
+        if entire_work_error:
+            return entire_work_error
     if revised and not confirm_revised:
         return json_result(
             {
@@ -355,9 +363,12 @@ def storage_get(
                 "stop": True,
             }
         )
-    canon, err = _gate_objects(
-        objects, entire_config=entire_config, confirm_entire=confirm_entire
-    )
+    if full_update:
+        canon, err = [], None
+    else:
+        canon, err = _gate_objects(
+            objects, entire_config=entire_config, confirm_entire=confirm_entire
+        )
     if err:
         return err
     assert canon is not None
@@ -365,7 +376,7 @@ def storage_get(
     task_err = require_work_task(task, target=target)
     if task_err:
         return json_result(task_err)
-    if (target or "").strip().lower() in ("work", "prod", "base3"):
+    if is_work and canon:
         pending_err = check_pending_stash_receipt(
             canon,
             task=task or "",
@@ -375,19 +386,20 @@ def storage_get(
         if pending_err:
             pending_err["step"] = "refuse_pending_reapply"
             return json_result(pending_err)
-    cap_err = refuse_get_captured(
-        canon,
-        target=target,
-        extension=ext_name,
-        confirm_get_captured=confirm_get_captured,
-    )
-    if cap_err:
-        return json_result(cap_err)
-    lock_err = acquire_object_locks(
-        canon, task=task or "", target=target, extension=ext_name, tool="storage_get"
-    )
-    if lock_err:
-        return json_result(lock_err)
+    if canon:
+        cap_err = refuse_get_captured(
+            canon,
+            target=target,
+            extension=ext_name,
+            confirm_get_captured=confirm_get_captured,
+        )
+        if cap_err:
+            return json_result(cap_err)
+        lock_err = acquire_object_locks(
+            canon, task=task or "", target=target, extension=ext_name, tool="storage_get"
+        )
+        if lock_err:
+            return json_result(lock_err)
 
     work = Path(env("DUMP_TMP_ROOT", str(Path.cwd() / ".tmp" / "1c-storage"))) / now_stamp()
     work.mkdir(parents=True, exist_ok=True)

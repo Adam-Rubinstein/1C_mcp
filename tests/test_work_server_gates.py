@@ -391,6 +391,30 @@ def test_work_storage_get_is_always_forbidden(
     assert payload["step"] == "use_storage_lock"
 
 
+def test_work_storage_get_full_update_reaches_update_cfg(monkeypatch: pytest.MonkeyPatch) -> None:
+    server = _load_server("storage_server_full_update", "mcp-1c-storage")
+    seen: dict[str, object] = {}
+
+    def _capture(designer_args, **kwargs):
+        seen["args"] = list(designer_args)
+        seen["objects"] = kwargs.get("objects")
+        return {"ok": True, "exitCode": 0}
+
+    monkeypatch.setattr(server, "_run_storage_op", _capture)
+    monkeypatch.setattr(server, "_finish_storage", lambda payload, **_kwargs: json.dumps(payload))
+    payload = json.loads(
+        server.storage_get(
+            target="work",
+            task="6200",
+            entire_config=True,
+            confirm_entire=True,
+        )
+    )
+    assert payload["ok"] is True
+    assert seen["args"] == ["/ConfigurationRepositoryUpdateCfg"]
+    assert seen["objects"] == []
+
+
 @pytest.mark.parametrize(
     ("method", "arguments"),
     [
