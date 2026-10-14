@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from . import env, normalize_object_name
+from .git_run import run_git
 
 
 def _gates_root() -> Path:
@@ -830,16 +831,16 @@ def dirty_paths_vs_git(dest_dir: Path, rel_paths: list[str]) -> list[str]:
             continue
         posix = str(rel_to_root).replace("\\", "/")
         try:
-            diff = subprocess.run(
-                ["git", "-C", str(root), "diff", "--name-only", "HEAD", "--", posix],
+            diff = run_git(
+                ["-C", str(root), "diff", "--name-only", "HEAD", "--", posix],
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
                 timeout=30,
             )
-            untracked = subprocess.run(
-                ["git", "-C", str(root), "ls-files", "--others", "--exclude-standard", "--", posix],
+            untracked = run_git(
+                ["-C", str(root), "ls-files", "--others", "--exclude-standard", "--", posix],
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
@@ -879,8 +880,8 @@ def stash_dirty_paths(dest_dir: Path, dirty: list[str]) -> Path:
     manifest: list[dict[str, str]] = []
     for posix in dirty:
         abs_path = root / posix.replace("/", os.sep)
-        tracked = subprocess.run(
-            ["git", "-C", str(root), "ls-files", "--error-unmatch", "--", posix],
+        tracked = run_git(
+            ["-C", str(root), "ls-files", "--error-unmatch", "--", posix],
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -895,8 +896,8 @@ def stash_dirty_paths(dest_dir: Path, dirty: list[str]) -> Path:
                 kind = "tracked"
             else:
                 kind = "tracked_deleted"
-            checkout = subprocess.run(
-                ["git", "-C", str(root), "checkout", "HEAD", "--", posix],
+            checkout = run_git(
+                ["-C", str(root), "checkout", "HEAD", "--", posix],
                 capture_output=True,
                 text=True,
                 encoding="utf-8",

@@ -48,6 +48,7 @@ from onec_mcp_shared.work_integrity import (  # noqa: E402
     write_pending_stash_receipt,
 )
 from onec_mcp_shared.server_run import make_mcp, run_mcp  # noqa: E402
+from onec_mcp_shared.git_run import run_git  # noqa: E402
 from onec_mcp_shared.session import with_managed_session  # noqa: E402
 from onec_mcp_shared import meta_rag  # noqa: E402
 
@@ -592,8 +593,8 @@ def reapply_stash(
             }
         )
 
-    git_root_result = subprocess.run(
-        ["git", "-C", str(source), "rev-parse", "--show-toplevel"],
+    git_root_result = run_git(
+        ["-C", str(source), "rev-parse", "--show-toplevel"],
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -643,8 +644,8 @@ def reapply_stash(
             conflicts.append({"path": rel, "error": f"unsupported stash kind: {kind}"})
             continue
 
-        base_result = subprocess.run(
-            ["git", "-C", str(git_root), "show", f"HEAD:{rel}"],
+        base_result = run_git(
+            ["-C", str(git_root), "show", f"HEAD:{rel}"],
             capture_output=True,
             check=False,
         )
@@ -667,9 +668,8 @@ def reapply_stash(
             current_file.write_bytes(current_for_merge)
             base_file.write_bytes(base_for_merge)
             stash_file.write_bytes(stash_for_merge)
-            merge_result = subprocess.run(
+            merge_result = run_git(
                 [
-                    "git",
                     "merge-file",
                     "-p",
                     str(current_file),
