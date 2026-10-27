@@ -108,10 +108,16 @@ def sanity_check_configuration(
     cand_uuid = read_configuration_uuid(candidate)
     cand_count = child_objects_count(candidate)
     names = child_object_names(candidate)
+    raw = candidate.read_text(encoding="utf-8", errors="replace")
+    is_cfe_root = (
+        "<Name>Эстет_Доработки</Name>" in raw
+        or "<ConfigurationExtensionPurpose>" in raw
+    )
 
-    for marker in _REQUIRED_MARKERS:
-        if marker not in names:
-            errors.append(f"missing ChildObjects marker: {marker}")
+    if not is_cfe_root:
+        for marker in _REQUIRED_MARKERS:
+            if marker not in names:
+                errors.append(f"missing ChildObjects marker: {marker}")
 
     baseline_count = None
     baseline_uuid = None
@@ -134,8 +140,9 @@ def sanity_check_configuration(
                 )
 
     # Absolute floor — empty/tiny root is never OK for Estet ERP
-    if cand_count < 50:
-        errors.append(f"ChildObjects count too low: {cand_count} (min 50)")
+    min_children = 10 if is_cfe_root else 50
+    if cand_count < min_children:
+        errors.append(f"ChildObjects count too low: {cand_count} (min {min_children})")
 
     return {
         "ok": not errors,
@@ -232,7 +239,11 @@ def _xml_tag_for_meta(kind: str) -> str:
 
 
 def patch_child_objects(configuration_xml: Path, *, kind: str, object_name: str) -> bool:
-    """Insert <Kind>Name</Kind> into ChildObjects if missing. Returns True if inserted."""
+    """Insert <Kind>Name</Kind> into ChildObjects if missing. Returns True if inserted.
+
+    Designer re-dumps ChildObjects in kind-grouped alpha order. Insert in that
+    position so post-load Configuration.xml hash matches the staging source.
+    """
     text = configuration_xml.read_text(encoding="utf-8")
     tag = _xml_tag_for_meta(kind)
     needle = f"<{tag}>{object_name}</{tag}>"
@@ -241,14 +252,28 @@ def patch_child_objects(configuration_xml: Path, *, kind: str, object_name: str)
     m = _CHILD_RE.search(text)
     if not m:
         raise ValueError("ChildObjects block not found in Configuration.xml")
-    insert = f"\t\t{needle}\n"
-    # insert before </ChildObjects>
-    end = m.end(1)
-    # m.start(1) is inside ChildObjects; find closing tag position
     close = text.find("</ChildObjects>", m.start())
     if close < 0:
         raise ValueError("Closing ChildObjects not found")
-    text = text[:close] + insert + text[close:]
+    insert = f"\t\t{needle}\n"
+    # Prefer alphabetical slot among existing <tag>…</tag> siblings (Designer order).
+    tag_re = re.compile(
+        rf"(\t*)<{re.escape(tag)}>([^<]+)</{re.escape(tag)}>\r?\n"
+    )
+    insert_at = None
+    last_same_kind_end = None
+    for tm in tag_re.finditer(text, m.start(), close):
+        last_same_kind_end = tm.end()
+        if tm.group(2) > object_name:
+            indent = tm.group(1) or "\t\t"
+            insert = f"{indent}{needle}\n"
+            insert_at = tm.start()
+            break
+    if insert_at is None and last_same_kind_end is not None:
+        insert_at = last_same_kind_end
+    if insert_at is None:
+        insert_at = close
+    text = text[:insert_at] + insert + text[insert_at:]
     configuration_xml.write_text(text, encoding="utf-8")
     return True
 
@@ -260,6 +285,11 @@ def configuration_ext_missing(dump_or_staging: Path) -> list[str]:
     for rel in _REQUIRED_EXT_REL:
         if not (root / Path(rel)).is_file():
             missing.append(rel)
+    if not missing:
+        return []
+    # CFE dumps Ext/HomePageWorkArea.xml (+ SessionModule) and do not emit main-CF CI files.
+    if (root / "Ext/HomePageWorkArea.xml").is_file():
+        return []
     return missing
 
 
