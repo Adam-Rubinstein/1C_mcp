@@ -26,7 +26,7 @@ MOUSEEVENTF_LEFTUP = 0x0004
 _PS_UIA = r"""
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
-$root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$env:UI_HWND)
+$root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr][Int64]$env:UI_HWND)
 $all = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
 $want = $env:UI_NAME
 $out = @()
@@ -58,7 +58,7 @@ public class UiShot {
   public struct RECT { public int L; public int T; public int R; public int B; }
 }
 "@
-$hwnd = [IntPtr]$env:UI_HWND
+$hwnd = [IntPtr][Int64]$env:UI_HWND
 $rect = New-Object UiShot+RECT
 [UiShot]::GetWindowRect($hwnd, [ref]$rect) | Out-Null
 $w = $rect.R - $rect.L
