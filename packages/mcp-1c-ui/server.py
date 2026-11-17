@@ -88,12 +88,15 @@ def ui_invoke(name_contains: str) -> str:
 
 
 @mcp.tool()
-def ui_type(text: str) -> str:
-    """Type into the focused ERP field. Digits are virtual keys; other characters are Unicode."""
+def ui_type(text: str, x: int = 0, y: int = 0) -> str:
+    """Type into the ERP field. If x,y > 0, focuses that UIA element via SendKeys (no process foreground). Else needs focus."""
     try:
         window = _window()
-        win_ui.type_text(window, text)
-        return json_result({"ok": True, "window": window, "length": len(text)})
+        if int(x) > 0 and int(y) > 0:
+            win_ui.type_at(window, int(x), int(y), text)
+        else:
+            win_ui.type_text(window, text)
+        return json_result({"ok": True, "window": window, "length": len(text), "x": x, "y": y})
     except Exception as exc:  # noqa: BLE001
         return json_result({"ok": False, "error": str(exc)})
 

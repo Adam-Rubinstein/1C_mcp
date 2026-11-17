@@ -103,6 +103,25 @@ if ($el.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern,
 }
 """
 
+_PS_TYPE_AT = r"""
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+Add-Type -AssemblyName System.Windows.Forms
+$root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr][Int64]$env:UI_HWND)
+$x = [int]$env:UI_X
+$y = [int]$env:UI_Y
+$pt = New-Object System.Windows.Point($x, $y)
+$el = [System.Windows.Automation.AutomationElement]::FromPoint($pt)
+if ($el -eq $null) { throw "no element at point" }
+$el.SetFocus()
+Start-Sleep -Milliseconds 150
+$text = $env:UI_TEXT
+[System.Windows.Forms.SendKeys]::SendWait("^a")
+Start-Sleep -Milliseconds 50
+[System.Windows.Forms.SendKeys]::SendWait($text)
+Write-Output ("TYPED=" + $el.Current.ControlType.ProgrammaticName)
+"""
+
 
 class KEYBDINPUT(ctypes.Structure):
     _fields_ = [
@@ -245,8 +264,12 @@ def _send(inputs: list[INPUT]) -> None:
 
 
 def type_text(window: dict, text: str) -> None:
-    focus(window)
-    _require_foreground(window)
+    try:
+        focus(window)
+        _require_foreground(window)
+    except RuntimeError:
+        # Fallback: UIA SetFocus + SendKeys into current caret (caller should point field first).
+        raise
     batch: list[INPUT] = []
     for event in key_events(text):
         down = INPUT(type=1)
@@ -262,6 +285,32 @@ def type_text(window: dict, text: str) -> None:
             up.u.ki.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP
         batch.extend((down, up))
     _send(batch)
+
+
+def type_at(window: dict, x: int, y: int, text: str) -> None:
+    """Focus the UIA element under (x,y) and type via SendKeys — works without process foreground."""
+    if not text:
+        raise RuntimeError("text required")
+    # Escape SendKeys specials except we pass raw; brace specials.
+    escaped = (
+        text.replace("{", "{{")
+        .replace("}", "}}")
+        .replace("+", "{+}")
+        .replace("^", "{^}")
+        .replace("%", "{%}")
+        .replace("~", "{~}")
+        .replace("(", "{(}")
+        .replace(")", "{)}")
+    )
+    _run_ps(
+        _PS_TYPE_AT,
+        {
+            "UI_HWND": str(int(window["hwnd"])),
+            "UI_X": str(int(x)),
+            "UI_Y": str(int(y)),
+            "UI_TEXT": escaped,
+        },
+    )
 
 
 def tap_key(window: dict, vk: int) -> None:
