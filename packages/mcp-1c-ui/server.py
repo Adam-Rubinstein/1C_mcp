@@ -67,11 +67,22 @@ def ui_shot(path: str) -> str:
 
 @mcp.tool()
 def ui_click(x: int, y: int, name: str = "", confirm_write: bool = False) -> str:
-    """Click inside the WORK Enterprise window. Refuses Провести и закрыть and Да unless confirm_write."""
+    """Click inside the WORK Enterprise window. Refuses Провести и закрыть and Да unless confirm_write. If focus is blocked and name is set, uses UIA Invoke."""
     try:
         window = _window()
         win_ui.click_at(window, x, y, name=name, confirm_write=confirm_write)
         return json_result({"ok": True, "window": window, "x": x, "y": y, "name": name})
+    except Exception as exc:  # noqa: BLE001
+        return json_result({"ok": False, "error": str(exc)})
+
+
+@mcp.tool()
+def ui_invoke(name_contains: str) -> str:
+    """Invoke a named control in WORK Enterprise via UI Automation (no mouse focus required)."""
+    try:
+        window = _window()
+        win_ui.invoke_by_name(window, name_contains)
+        return json_result({"ok": True, "window": window, "name": name_contains})
     except Exception as exc:  # noqa: BLE001
         return json_result({"ok": False, "error": str(exc)})
 

@@ -55,6 +55,7 @@ using System;
 using System.Runtime.InteropServices;
 public class UiShot {
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+  [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h, IntPtr hdc, uint flags);
   public struct RECT { public int L; public int T; public int R; public int B; }
 }
 "@
@@ -66,10 +67,40 @@ $h = $rect.B - $rect.T
 if ($w -le 0 -or $h -le 0) { throw "empty window rect" }
 $bmp = New-Object System.Drawing.Bitmap $w, $h
 $g = [System.Drawing.Graphics]::FromImage($bmp)
-$g.CopyFromScreen($rect.L, $rect.T, 0, 0, $bmp.Size)
+$hdc = $g.GetHdc()
+$printed = [UiShot]::PrintWindow($hwnd, $hdc, 2)
+$g.ReleaseHdc($hdc)
+if (-not $printed) {
+  $g.CopyFromScreen($rect.L, $rect.T, 0, 0, $bmp.Size)
+}
 $bmp.Save($env:UI_SHOT, [System.Drawing.Imaging.ImageFormat]::Png)
 $g.Dispose(); $bmp.Dispose()
 Write-Output ("SAVED=" + $env:UI_SHOT)
+"""
+
+_PS_INVOKE = r"""
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+$root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr][Int64]$env:UI_HWND)
+$want = $env:UI_NAME
+if (-not $want) { throw "UI_NAME required" }
+$cond = New-Object System.Windows.Automation.PropertyCondition(
+  [System.Windows.Automation.AutomationElement]::NameProperty, $want)
+$el = $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $cond)
+if ($el -eq $null) {
+  $all = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
+  foreach ($cand in $all) {
+    if ($cand.Current.Name -like ("*" + $want + "*")) { $el = $cand; break }
+  }
+}
+if ($el -eq $null) { throw ("element not found: " + $want) }
+$pattern = $null
+if ($el.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) {
+  $pattern.Invoke()
+  Write-Output "INVOKED"
+} else {
+  throw ("no InvokePattern: " + $el.Current.Name)
+}
 """
 
 
@@ -158,10 +189,18 @@ def _base_env() -> dict[str, str]:
 def focus(window: dict) -> None:
     hwnd = int(window["hwnd"])
     user32.ShowWindow(hwnd, 9)
+    try:
+        user32.AllowSetForegroundWindow(-1)
+    except Exception:
+        pass
+    try:
+        user32.SwitchToThisWindow(hwnd, True)
+    except Exception:
+        pass
     current = ctypes.windll.kernel32.GetCurrentThreadId()
     target_pid = wintypes.DWORD()
     target_thread = user32.GetWindowThreadProcessId(hwnd, ctypes.byref(target_pid))
-    for _ in range(4):
+    for _ in range(6):
         fg = user32.GetForegroundWindow()
         fg_pid = wintypes.DWORD()
         fg_thread = user32.GetWindowThreadProcessId(fg, ctypes.byref(fg_pid))
@@ -179,6 +218,13 @@ def focus(window: dict) -> None:
         if int(now_pid.value) == int(window["pid"]):
             return
     raise RuntimeError("ERP window did not take focus")
+
+
+def invoke_by_name(window: dict, name_contains: str) -> None:
+    """Click via UI Automation InvokePattern — works when SetForegroundWindow is blocked."""
+    if not (name_contains or "").strip():
+        raise RuntimeError("name required for invoke")
+    _run_ps(_PS_INVOKE, {"UI_HWND": str(int(window["hwnd"])), "UI_NAME": name_contains.strip()})
 
 
 def _require_foreground(window: dict) -> None:
@@ -233,12 +279,21 @@ def click_at(window: dict, x: int, y: int, *, name: str = "", confirm_write: boo
     allowed, reason = click_allowed(name, confirm_write=confirm_write)
     if name and not allowed:
         raise RuntimeError(reason)
-    focus(window)
+    try:
+        focus(window)
+    except RuntimeError:
+        if name:
+            invoke_by_name(window, name)
+            return
+        raise
     point = POINT(int(x), int(y))
     under = user32.WindowFromPoint(point)
     pid = wintypes.DWORD()
     user32.GetWindowThreadProcessId(under, ctypes.byref(pid))
     if int(pid.value) != int(window["pid"]):
+        if name:
+            invoke_by_name(window, name)
+            return
         raise RuntimeError("click point is not the ERP window")
     user32.SetCursorPos(int(x), int(y))
     user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
