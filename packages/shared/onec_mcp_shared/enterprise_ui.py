@@ -1,4 +1,4 @@
-"""Pure rules for driving the ERP Enterprise window. No Win32 calls."""
+"""Pure rules for driving the Enterprise window. No Win32 calls."""
 
 from __future__ import annotations
 
@@ -20,12 +20,14 @@ def click_allowed(name: str, *, confirm_write: bool = False) -> tuple[bool, str]
 def pick_window(
     windows: list[dict],
     *,
-    must_contain: str = "КОПИЯ",
-    deny: tuple[str, ...] = ("Планировщик", "Конфигуратор"),
+    must_contain: str,
+    deny: tuple[str, ...] = ("Конфигуратор",),
 ) -> dict | None:
     """One Enterprise window. Designer and other infobases are not a match."""
+    must = (must_contain or "").casefold().strip()
+    if not must:
+        return None
     deny_folded = tuple(item.casefold() for item in deny)
-    must = must_contain.casefold()
     hits = []
     for window in windows:
         title = str(window.get("title") or "")

@@ -38,10 +38,15 @@ _CHILD_KINDS = {
     "Макет": "Template",
 }
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
-_MARKER_RE = re.compile(
-    r"^\s*//\s*(?:Эстет|Eugene|Таланцева|БИТ)(?:\b|_)",
-    re.IGNORECASE,
-)
+
+
+def _marker_re() -> re.Pattern[str]:
+    """Comment markers from ONEC_CHANGE_MARKERS (comma-separated). Empty matches nothing."""
+    names = [re.escape(part.strip()) for part in os.environ.get("ONEC_CHANGE_MARKERS", "").split(",") if part.strip()]
+    if not names:
+        return re.compile(r"a^")
+    body = "|".join(names)
+    return re.compile(rf"^\s*//\s*(?:{body})(?:\b|_)", re.IGNORECASE)
 _UNIT_START_RE = re.compile(
     r"^\s*(?:Асинх\s+|Async\s+)?"
     r"(Процедура|Функция|Procedure|Function)\s+"
@@ -393,7 +398,7 @@ def _normalize_bsl_code(line: str) -> str:
 def _marker_lines(text: str) -> list[JsonObject]:
     result: list[JsonObject] = []
     for line_number, line in enumerate(text.splitlines(), start=1):
-        if not _MARKER_RE.match(line):
+        if not _marker_re().match(line):
             continue
         normalized = " ".join(line.strip().split())
         result.append(

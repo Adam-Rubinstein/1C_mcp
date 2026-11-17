@@ -1,7 +1,7 @@
 """COM connect for 1C 8.3.x: comtypes + IV8COMConnector3, no win32com Connect.
 
 win32com Dispatch('V83.COMConnector').Connect fails with TYPE_E_LIBNOTREGISTERED
-on 8.3.27. GetObject wrapping via ITypeComp also fails (E_NOTIMPL) — always use
+on some builds. GetObject wrapping via ITypeComp also fails (E_NOTIMPL) — always use
 comtypes.client.dynamic._Dispatch.
 
 Always close the application object after a tool call: leftover COM sessions
@@ -14,6 +14,7 @@ import atexit
 import contextlib
 import ctypes
 import gc
+import os
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -53,9 +54,16 @@ def _comcntr_path() -> Path:
         p = Path(bin_exe).parent / "comcntr.dll"
         if p.is_file():
             return p
-    fallback = Path(r"C:\Program Files\1cv8\8.3.27.1719\bin\comcntr.dll")
-    if fallback.is_file():
-        return fallback
+    root = Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "1cv8"
+    found = list(root.glob("*/bin/comcntr.dll")) if root.is_dir() else []
+    if found:
+        def _ver(path: Path) -> tuple[int, ...]:
+            parts: list[int] = []
+            for bit in path.parents[1].name.split("."):
+                parts.append(int(bit) if bit.isdigit() else 0)
+            return tuple(parts)
+
+        return max(found, key=_ver)
     raise RuntimeError("comcntr.dll not found. Set ONEC_PLATFORM_PATH or ONEC_BIN.")
 
 
@@ -124,24 +132,33 @@ def _ensure_atexit() -> None:
     _ATEXIT_DONE = True
 
 
+def _server_aliases() -> set[str]:
+    names = {"server", "srv", "prod_server"}
+    extra = (env("ONEC_SERVER_ALIAS") or "").strip().lower()
+    if extra:
+        names.add(extra)
+    return names
+
+
 def _is_server_target(target: str) -> bool:
-    t = (target or "").strip().lower()
-    return t in ("talanceva", "server", "srv", "prod_server")
+    return (target or "").strip().lower() in _server_aliases()
 
 
 def _server_conn_parts(target: str) -> tuple[str, str, str, str]:
     t = (target or "").strip().lower()
-    if t in ("talanceva", "server", "srv"):
-        server = env("ONEC_SERVER_TALANCEVA") or "srv1021:1841"
-        ref = env("ONEC_REF_TALANCEVA") or "Talanceva"
-        user = env("ONEC_USER_TALANCEVA") or env("ONEC_USER_WORK") or env("ONEC_USER", "") or ""
-        password = env("ONEC_PASSWORD_TALANCEVA")
-        if password is None:
-            password = env("ONEC_PASSWORD_WORK")
-        if password is None:
-            password = env("ONEC_PASSWORD", "") or ""
-        return server, ref, user, password or ""
-    raise ValueError(f"Unknown server IB target: {target!r}")
+    if t not in _server_aliases():
+        raise ValueError(f"Unknown server IB target: {target!r}")
+    server = (env("ONEC_SERVER") or "").strip()
+    ref = (env("ONEC_SERVER_REF") or "").strip()
+    if not server or not ref:
+        raise RuntimeError("Set ONEC_SERVER and ONEC_SERVER_REF")
+    user = env("ONEC_USER_SERVER") or env("ONEC_USER_WORK") or env("ONEC_USER", "") or ""
+    password = env("ONEC_PASSWORD_SERVER")
+    if password is None:
+        password = env("ONEC_PASSWORD_WORK")
+    if password is None:
+        password = env("ONEC_PASSWORD", "") or ""
+    return server, ref, user, password or ""
 
 
 def connect(*, target: str = "work") -> tuple[Any, Any]:
@@ -196,7 +213,7 @@ def ib_label(target: str) -> dict[str, Any]:
     t = (target or default_target()).strip().lower()
     if _is_server_target(t):
         server, ref, user, _ = _server_conn_parts(t)
-        return {"target": "talanceva", "ib": f'Srvr="{server}";Ref="{ref}";', "user": user}
+        return {"target": "server", "ib": f'Srvr="{server}";Ref="{ref}";', "user": user}
     work = is_work_target(t)
     try:
         ib = resolve_ib("work" if work else "dev")

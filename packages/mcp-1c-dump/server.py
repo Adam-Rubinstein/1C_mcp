@@ -144,7 +144,7 @@ def dump_objects(
                     "hint": (
                         "Pass manage_session=true and force_close=true. "
                         "Agent must close/reopen Designer, not ask the user. "
-                        "Do not python -c / shell Designer on InfoBase3."
+                        "Do not python -c / shell Designer on the WORK infobase."
                     ),
                     "stop": True,
                 }

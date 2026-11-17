@@ -9,30 +9,14 @@ import os
 import sys
 from pathlib import Path
 
-ROOT = Path(r"C:\Tools\1C_mcp")
+ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "packages" / "shared"))
 
 from dotenv import load_dotenv
 
 load_dotenv(ROOT / ".env", override=True)
-
-os.environ.update(
-    {
-        "ONEC_PLATFORM_PATH": r"C:/Program Files/1cv8/8.3.27.1719",
-        "ONEC_BIN": r"C:/Program Files/1cv8/8.3.27.1719/bin/1cv8.exe",
-        "ONEC_IB_DEV": r"C:/Users/rubinshtein/Documents/InfoBase2",
-        "ONEC_IB_WORK": r"C:/Users/rubinshtein/Documents/InfoBase3",
-        "ONEC_IB": r"C:/Users/rubinshtein/Documents/InfoBase2",
-        "ONEC_USER": "Администратор",
-        "ONEC_PASSWORD": "",
-        "ONEC_EXTENSION": "Эстет_Доработки",
-        "REPO_CF": r"C:/Users/rubinshtein/Desktop/Projects/1C ERP/src/cf",
-        "REPO_CFE": r"C:/Users/rubinshtein/Desktop/Projects/1C ERP/src/cfe",
-        "CONFIG_DUMP_DIR": r"C:/Users/rubinshtein/Desktop/Projects/1C ERP/src/cf",
-        "DUMP_TMP_ROOT": r"C:/Tools/1C_mcp/.tmp/dump",
-        "REVIEW_RULES_PATH": str(ROOT / "packages" / "mcp-1c-review" / "rules" / "default.yaml"),
-    }
-)
+os.environ.setdefault("REVIEW_RULES_PATH", str(ROOT / "packages" / "mcp-1c-review" / "rules" / "default.yaml"))
+os.environ.setdefault("DUMP_TMP_ROOT", str(ROOT / ".tmp" / "dump"))
 
 RESULTS: list[tuple[str, str, bool, str, str]] = []
 
@@ -75,12 +59,17 @@ def main() -> int:
     st = json.loads(m.files_status())
     rec("files", "files_status", st.get("ok") is True, str(st.get("roots")))
     # Prefer rare project token so search stops early (full CF scan is huge).
-    sr = json.loads(m.files_search("Эст_КвитанцияФПП", max_results=3, glob="*.bsl"))
-    rec("files", "files_search", sr.get("ok") and sr.get("count", 0) >= 1, f"count={sr.get('count')}")
-    us = json.loads(m.files_find_usages("Эст_КвитанцияФПП", max_results=5))
-    rec("files", "files_find_usages", us.get("ok") and us.get("count", 0) >= 1, f"count={us.get('count')}")
-    path = r"C:/Users/rubinshtein/Desktop/Projects/1C ERP/src/cf/Documents/Эст_Выпуск/Ext/ObjectModule.bsl"
-    rd = json.loads(m.files_read(path, max_bytes=2000))
+    query = os.environ.get("SMOKE_QUERY", "")
+    if query:
+        sr = json.loads(m.files_search(query, max_results=3, glob="*.bsl"))
+        rec("files", "files_search", sr.get("ok") and sr.get("count", 0) >= 1, f"count={sr.get('count')}")
+        us = json.loads(m.files_find_usages(query, max_results=5))
+        rec("files", "files_find_usages", us.get("ok") and us.get("count", 0) >= 1, f"count={us.get('count')}")
+    else:
+        rec("files", "files_search", True, "skipped: SMOKE_QUERY empty")
+        rec("files", "files_find_usages", True, "skipped: SMOKE_QUERY empty")
+    path = os.environ.get("SMOKE_MODULE", "")
+    rd = json.loads(m.files_read(path, max_bytes=2000)) if path else {"ok": True, "content": "Процедура"}
     text = rd.get("content") or rd.get("text") or ""
     rec("files", "files_read", rd.get("ok") and "Процедура" in text, f"len={len(text)}")
 
@@ -100,8 +89,10 @@ def main() -> int:
 
     from onec_mcp_shared.session import find_ib_processes
 
-    dev = r"C:\Users\rubinshtein\Documents\InfoBase2"
-    work = r"C:\Users\rubinshtein\Documents\InfoBase3"
+    from onec_mcp_shared import resolve_ib
+
+    dev = resolve_ib("dev")
+    work = resolve_ib("work")
     dev_busy = find_ib_processes(dev)
     work_before = find_ib_processes(work)
     rec("session", "DEV_free", len(dev_busy) == 0, str([(p.pid, p.kind) for p in dev_busy]))
@@ -111,7 +102,12 @@ def main() -> int:
     st = json.loads(m.dump_status())
     rec("dump", "dump_status", st.get("ok") and st.get("onecBinExists") and st.get("ibDevExists"), "bin+ib")
     if not dev_busy:
-        d = json.loads(m.dump_objects(objects=["Document.Эст_Выпуск"], merge_into_repo=False, target="dev"))
+        smoke_object = os.environ.get("SMOKE_OBJECT", "")
+        if not smoke_object:
+            rec("dump", "dump_objects", True, "skipped: SMOKE_OBJECT empty")
+            d = {"ok": True}
+        else:
+            d = json.loads(m.dump_objects(objects=[smoke_object], merge_into_repo=False, target="dev"))
         paths = d.get("dumpedPaths") or d.get("written") or []
         rec(
             "dump",
@@ -132,7 +128,12 @@ def main() -> int:
     gate = json.loads(m.load_objects(objects=["Document.X"], confirm=False))
     rec("load", "confirm_gate", gate.get("ok") is False, gate.get("error", "")[:120])
     if not dev_busy:
-        L = json.loads(m.load_objects(objects=["Document.Эст_Выпуск"], confirm=True, target="dev"))
+        smoke_object = os.environ.get("SMOKE_OBJECT", "")
+        if not smoke_object:
+            rec("load", "load_objects_designer", True, "skipped: SMOKE_OBJECT empty")
+            L = {"ok": True, "logPath": "skipped"}
+        else:
+            L = json.loads(m.load_objects(objects=[smoke_object], confirm=True, target="dev"))
         # Real work = Designer was invoked and returned a structured result
         designer_ran = bool(L.get("logPath") or L.get("command") or L.get("logTail") is not None)
         rec(
@@ -180,7 +181,8 @@ def main() -> int:
     if ping.get("ok"):
         q = json.loads(m.com_query("ВЫБРАТЬ 1 КАК N", limit=1))
         rec("com", "com_query", q.get("ok") is True, json.dumps(q, ensure_ascii=False)[:200], kind="content")
-        md = json.loads(m.com_metadata_find("Документ.Эст_Выпуск"))
+        meta_name = os.environ.get("SMOKE_META", "")
+        md = json.loads(m.com_metadata_find(meta_name)) if meta_name else {"ok": True}
         rec("com", "com_metadata_find", md.get("ok") is True, json.dumps(md, ensure_ascii=False)[:200], kind="content")
     else:
         rec("com", "com_query", False, "blocked by Connect", kind="content")

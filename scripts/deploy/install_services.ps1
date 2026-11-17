@@ -61,7 +61,7 @@ if ($StartNow) {
         Start-McpService $s.Name $s.Port
     }
     Write-Host "Platform JAR: start separately, e.g."
-    Write-Host '  java -Dfile.encoding=UTF-8 -jar packages\mcp-1c-platform\runtime\1C_mcp_bsl.jar --platform-path "...\8.3.27.1719" --mode sse --port 8760'
+    Write-Host '  java -Dfile.encoding=UTF-8 -jar packages\mcp-1c-platform\runtime\1C_mcp_bsl.jar --platform-path "<1CV8_ROOT>" --mode sse --port 8760'
     Write-Host "Optional Bearer proxy: MCP_TOKEN=... UPSTREAM_URL=http://127.0.0.1:8760 python scripts\sse_auth_proxy.py"
 } else {
     Write-Host "Usage: .\install_services.ps1 -StartNow"

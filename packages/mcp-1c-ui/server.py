@@ -28,10 +28,13 @@ _KEYS = {
 
 
 def _window() -> dict:
-    must = env("UI_TITLE_MUST", "КОПИЯ") or "КОПИЯ"
-    chosen = pick_window(win_ui.list_windows(), must_contain=must)
+    must = (env("UI_TITLE_MUST") or "").strip()
+    if not must:
+        raise RuntimeError("Set UI_TITLE_MUST to the WORK window title")
+    extra = tuple(part.strip() for part in (env("UI_TITLE_DENY") or "").split(",") if part.strip())
+    chosen = pick_window(win_ui.list_windows(), must_contain=must, deny=("Конфигуратор", *extra))
     if chosen is None:
-        raise RuntimeError("ERP Enterprise window not found or not unique")
+        raise RuntimeError("Enterprise window not found or not unique")
     return chosen
 
 
@@ -43,7 +46,7 @@ def ui_windows() -> str:
 
 @mcp.tool()
 def ui_find(name_contains: str = "") -> str:
-    """Find UI Automation elements in the ERP КОПИЯ window. 1C tab Select() is not implemented; click the bounds."""
+    """Find UI Automation elements in the WORK Enterprise window. 1C tab Select() is not implemented; click the bounds."""
     try:
         window = _window()
         return json_result({"ok": True, "window": window, "elements": win_ui.uia_find(window, name_contains)})
@@ -53,7 +56,7 @@ def ui_find(name_contains: str = "") -> str:
 
 @mcp.tool()
 def ui_shot(path: str) -> str:
-    """Screenshot the ERP КОПИЯ window to a png. A pid is not a screenshot."""
+    """Screenshot the WORK Enterprise window to a png. A pid is not a screenshot."""
     try:
         window = _window()
         saved = win_ui.screenshot(window, path)
@@ -64,7 +67,7 @@ def ui_shot(path: str) -> str:
 
 @mcp.tool()
 def ui_click(x: int, y: int, name: str = "", confirm_write: bool = False) -> str:
-    """Click inside ERP КОПИЯ. Refuses Провести и закрыть and Да unless confirm_write."""
+    """Click inside the WORK Enterprise window. Refuses Провести и закрыть and Да unless confirm_write."""
     try:
         window = _window()
         win_ui.click_at(window, x, y, name=name, confirm_write=confirm_write)

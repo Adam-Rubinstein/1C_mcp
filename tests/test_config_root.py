@@ -31,7 +31,7 @@ def test_includes_configuration_root():
     assert cr.includes_configuration_root(["Configuration"])
     assert cr.includes_configuration_root(["Configuration.xml"])
     assert cr.includes_configuration_root(["DataProcessor.X", "Configuration"])
-    assert not cr.includes_configuration_root(["Document.Эст_Выпуск"])
+    assert not cr.includes_configuration_root(["Document.Vendor_Doc"])
 
 
 def test_gate_refuses_repo_cf(tmp_path: Path):
@@ -65,8 +65,8 @@ def test_sanity_detects_shrink(tmp_path: Path):
     base = tmp_path / "base.xml"
     cand = tmp_path / "cand.xml"
     kids = [("DataProcessor", f"P{i}") for i in range(60)]
-    kids.append(("DataProcessor", "ЭСТ_РабочийСтолСклад"))
-    kids.append(("Document", "Эст_Выпуск"))
+    kids.append(("DataProcessor", "Vendor_Desk"))
+    kids.append(("Document", "Vendor_Doc"))
     _write_cfg(base, uuid=uid, children=kids)
     _write_cfg(cand, uuid=uid, children=kids[:10])
     s = cr.sanity_check_configuration(cand, baseline=base)
@@ -92,8 +92,8 @@ def test_prepared_staging_ok(tmp_path: Path, monkeypatch):
     staging = tmp_path / "staging"
     staging.mkdir()
     kids = [("DataProcessor", f"P{i}") for i in range(60)]
-    kids.append(("DataProcessor", "ЭСТ_РабочийСтолСклад"))
-    kids.append(("Document", "Эст_Выпуск"))
+    kids.append(("DataProcessor", "Vendor_Desk"))
+    kids.append(("Document", "Vendor_Doc"))
     kids.append(("DataProcessor", "NewOne"))
     baseline = staging / "_baseline_Configuration.xml"
     cfg = staging / "Configuration.xml"
@@ -123,8 +123,8 @@ def test_gate_refuses_configuration_without_ext(tmp_path: Path):
     staging.mkdir()
     uid = "44444444-4444-4444-4444-444444444444"
     kids = [("DataProcessor", f"P{i}") for i in range(60)]
-    kids.append(("DataProcessor", "ЭСТ_РабочийСтолСклад"))
-    kids.append(("Document", "Эст_Выпуск"))
+    kids.append(("DataProcessor", "Vendor_Desk"))
+    kids.append(("Document", "Vendor_Doc"))
     _write_cfg(staging / "Configuration.xml", uuid=uid, children=kids)
     g = cr.gate_configuration_root_load(
         ["Configuration"],

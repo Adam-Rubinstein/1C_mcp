@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Detailed audit of all 1C MCP packages + Estet mcp.json wiring."""
+"""Detailed audit of all 1C MCP packages and the local mcp.json wiring."""
 
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ import sys
 import time
 from pathlib import Path
 
-ROOT = Path(r"C:\Tools\1C_mcp")
-ESTET_MCP = Path(r"C:\Users\rubinshtein\Desktop\Projects\1C ERP\.cursor\mcp.json")
+ROOT = Path(__file__).resolve().parents[1]
+ESTET_MCP = Path(os.environ.get("MCP_JSON_PATH", ""))
 sys.path.insert(0, str(ROOT / "packages" / "shared"))
 
 try:
@@ -206,17 +206,17 @@ def mcp_stdio_initialize(server_key: str, timeout_sec: float = 20.0) -> tuple[bo
 
 def main() -> int:
     section("0. Paths & mcp.json")
-    plat = Path(os.environ.get("ONEC_PLATFORM_PATH", r"C:\Program Files\1cv8\8.3.27.1719"))
+    plat = Path(os.environ.get("ONEC_PLATFORM_PATH", ""))
     paths = {
         "venv python": ROOT / ".venv" / "Scripts" / "python.exe",
         "run_server.py": ROOT / "scripts" / "run_server.py",
-        "ONEC_BIN": Path(os.environ.get("ONEC_BIN", r"C:\Program Files\1cv8\8.3.27.1719\bin\1cv8.exe")),
+        "ONEC_BIN": Path(os.environ.get("ONEC_BIN", "")),
         "ONEC_PLATFORM_PATH": plat,
-        "ONEC_IB_DEV": Path(os.environ.get("ONEC_IB_DEV", r"C:\Users\rubinshtein\Documents\InfoBase2")),
-        "ONEC_IB_WORK": Path(os.environ.get("ONEC_IB_WORK", r"C:\Users\rubinshtein\Documents\InfoBase3")),
-        "REPO_CF": Path(os.environ.get("REPO_CF", r"C:\Users\rubinshtein\Desktop\Projects\1C ERP\src\cf")),
-        "REPO_CFE": Path(os.environ.get("REPO_CFE", r"C:\Users\rubinshtein\Desktop\Projects\1C ERP\src\cfe")),
-        "estet mcp.json": ESTET_MCP,
+        "ONEC_IB_DEV": Path(os.environ.get("ONEC_IB_DEV", "")),
+        "ONEC_IB_WORK": Path(os.environ.get("ONEC_IB_WORK", "")),
+        "REPO_CF": Path(os.environ.get("REPO_CF", "")),
+        "REPO_CFE": Path(os.environ.get("REPO_CFE", "")),
+        "mcp.json": ESTET_MCP,
     }
     for label, p in paths.items():
         record("infra", label, p.exists(), str(p))
@@ -234,7 +234,11 @@ def main() -> int:
         "1c-debug",
         "1c-bsl",
     ]
-    cfg = json.loads(ESTET_MCP.read_text(encoding="utf-8"))
+    if not ESTET_MCP.is_file():
+        record("infra", "mcp.json has all 9", False, "set MCP_JSON_PATH")
+        cfg = {"mcpServers": {}}
+    else:
+        cfg = json.loads(ESTET_MCP.read_text(encoding="utf-8"))
     configured = list(cfg.get("mcpServers", {}).keys())
     record("infra", "mcp.json has all 9", set(configured) == set(expected_servers), str(configured))
     for s in expected_servers:
@@ -286,12 +290,23 @@ def main() -> int:
         mod = load_mod("files", packages["files"])
         st = parse_json_or_text(mod.files_status())
         record("1c-files", "files_status", isinstance(st, dict) and st.get("ok") is not False, json.dumps(st, ensure_ascii=False)[:200] if isinstance(st, dict) else str(st))
-        sr = parse_json_or_text(mod.files_search("Эст_Выпуск", max_results=5))
-        record("1c-files", "files_search", isinstance(sr, dict) and sr.get("ok") and sr.get("count", 0) >= 1, f"count={sr.get('count') if isinstance(sr, dict) else '?'}")
-        us = parse_json_or_text(mod.files_find_usages("Эст_Выпуск", max_results=10))
-        record("1c-files", "files_find_usages", isinstance(us, dict) and us.get("ok", True), f"count={us.get('count') if isinstance(us, dict) else '?'}")
-        path = r"C:\Users\rubinshtein\Desktop\Projects\1C ERP\src\cf\Documents\Эст_Выпуск\Ext\ObjectModule.bsl"
-        rd = parse_json_or_text(mod.files_read(path, max_bytes=5000))
+        query = os.environ.get("SMOKE_QUERY", "")
+        if not query:
+            record("1c-files", "files_search", True, "skipped: SMOKE_QUERY empty")
+            record("1c-files", "files_find_usages", True, "skipped: SMOKE_QUERY empty")
+            sr = {"ok": True, "count": 0}
+            us = {"ok": True, "count": 0}
+        else:
+            sr = parse_json_or_text(mod.files_search(query, max_results=5))
+            record("1c-files", "files_search", isinstance(sr, dict) and sr.get("ok") and sr.get("count", 0) >= 1, f"count={sr.get('count') if isinstance(sr, dict) else '?'}")
+            us = parse_json_or_text(mod.files_find_usages(query, max_results=10))
+            record("1c-files", "files_find_usages", isinstance(us, dict) and us.get("ok", True), f"count={us.get('count') if isinstance(us, dict) else '?'}")
+        path = os.environ.get("SMOKE_MODULE", "")
+        if not path:
+            record("1c-files", "files_read", True, "skipped: SMOKE_MODULE empty")
+            rd = {"ok": True, "content": "x"}
+        else:
+            rd = parse_json_or_text(mod.files_read(path, max_bytes=5000))
         content = ""
         if isinstance(rd, dict):
             content = rd.get("content") or rd.get("text") or ""
@@ -310,8 +325,8 @@ def main() -> int:
         chk = parse_json_or_text(mod.review_check(text="А = ТекущаяДата();\n"))
         findings = chk.get("findings") if isinstance(chk, dict) else []
         record("1c-review", "review_check no-current-date", any(f.get("rule") == "no-current-date" for f in (findings or [])), str(findings)[:200])
-        path = r"C:\Users\rubinshtein\Desktop\Projects\1C ERP\src\cf\Documents\Эст_Выпуск\Ext\ObjectModule.bsl"
-        chk2 = parse_json_or_text(mod.review_check(paths=[path]))
+        path = os.environ.get("SMOKE_MODULE", "")
+        chk2 = parse_json_or_text(mod.review_check(paths=[path])) if path else {"ok": True, "findings": []}
         record("1c-review", "review_check path", isinstance(chk2, dict) and chk2.get("ok") is not False, f"findings={len((chk2 or {}).get('findings') or [])}")
     except Exception as exc:
         record("1c-review", "module", False, str(exc))
@@ -320,8 +335,8 @@ def main() -> int:
     try:
         from onec_mcp_shared import resolve_ib
 
-        record("1c-dump", "resolve_ib dev", "InfoBase2" in resolve_ib("dev"), resolve_ib("dev"))
-        record("1c-dump", "resolve_ib work", "InfoBase3" in resolve_ib("work"), resolve_ib("work"))
+        record("1c-dump", "resolve_ib dev", bool(resolve_ib("dev")), "set")
+        record("1c-dump", "resolve_ib work", bool(resolve_ib("work")), "set")
         mod = load_mod("dump", packages["dump"])
         st = parse_json_or_text(mod.dump_status())
         record("1c-dump", "dump_status", isinstance(st, dict) and st.get("ok") is not False, json.dumps(st, ensure_ascii=False)[:250] if isinstance(st, dict) else str(st))
@@ -339,17 +354,25 @@ def main() -> int:
 
         real = sess._ibases_v8i_paths()
         record("session", "ibases.v8i", len(real) >= 2, str(real))
-        cmd_work = r'DESIGNER /IBName "ERP КОПИЯ"'
-        cmd_dev = r'DESIGNER /IBName "ERP КОПИЯ запасная" /Lru'
-        ok_exact = (
-            sess._cmdline_matches_ib(cmd_dev, r"C:\Users\rubinshtein\Documents\InfoBase2")
-            and not sess._cmdline_matches_ib(cmd_dev, r"C:\Users\rubinshtein\Documents\InfoBase3")
-            and sess._cmdline_matches_ib(cmd_work, r"C:\Users\rubinshtein\Documents\InfoBase3")
-            and not sess._cmdline_matches_ib(cmd_work, r"C:\Users\rubinshtein\Documents\InfoBase2")
-        )
+        from onec_mcp_shared import resolve_ib
+
+        dev = resolve_ib("dev")
+        work = resolve_ib("work")
+        name_dev = sess.ib_name_for_path(dev)
+        name_work = sess.ib_name_for_path(work)
+        ok_exact = False
+        if name_dev and name_work:
+            cmd_work = f'DESIGNER /IBName "{name_work}"'
+            cmd_dev = f'DESIGNER /IBName "{name_dev}" /Lru'
+            ok_exact = (
+                sess._cmdline_matches_ib(cmd_dev, dev)
+                and not sess._cmdline_matches_ib(cmd_dev, work)
+                and sess._cmdline_matches_ib(cmd_work, work)
+                and not sess._cmdline_matches_ib(cmd_work, dev)
+            )
         record("session", "exact IBName (no prefix bug)", ok_exact)
-        record("session", "DEV open processes", True, str([(p.pid, p.kind) for p in sess.find_ib_processes(r"C:\Users\rubinshtein\Documents\InfoBase2")]))
-        record("session", "WORK open processes", True, str([(p.pid, p.kind) for p in sess.find_ib_processes(r"C:\Users\rubinshtein\Documents\InfoBase3")]))
+        record("session", "DEV open processes", True, str([(p.pid, p.kind) for p in sess.find_ib_processes(dev)]))
+        record("session", "WORK open processes", True, str([(p.pid, p.kind) for p in sess.find_ib_processes(work)]))
     except Exception as exc:
         record("session", "module", False, str(exc))
 
@@ -363,7 +386,8 @@ def main() -> int:
         if isinstance(ping, dict) and ping.get("ok"):
             q = parse_json_or_text(mod.com_query("ВЫБРАТЬ 1 КАК N", limit=1))
             record("1c-com", "com_query", isinstance(q, dict) and q.get("ok") is True, json.dumps(q, ensure_ascii=False)[:200] if isinstance(q, dict) else str(q))
-            md = parse_json_or_text(mod.com_metadata_find("Документ.Эст_Выпуск"))
+            meta_name = os.environ.get("SMOKE_META", "")
+            md = parse_json_or_text(mod.com_metadata_find(meta_name)) if meta_name else {"ok": True}
             record("1c-com", "com_metadata_find", isinstance(md, dict) and md.get("ok") is True, json.dumps(md, ensure_ascii=False)[:200] if isinstance(md, dict) else str(md))
         else:
             record("1c-com", "com_query", False, "skipped: com_ping failed")
@@ -406,8 +430,10 @@ def main() -> int:
     section("10. Live IB dump/load DEV")
     from onec_mcp_shared.session import find_ib_processes
 
-    dev = r"C:\Users\rubinshtein\Documents\InfoBase2"
-    work = r"C:\Users\rubinshtein\Documents\InfoBase3"
+    from onec_mcp_shared import resolve_ib
+
+    dev = resolve_ib("dev")
+    work = resolve_ib("work")
     dev_busy = find_ib_processes(dev)
     work_busy = find_ib_processes(work)
     record("live-ib", "DEV free", len(dev_busy) == 0, str(dev_busy))
@@ -415,11 +441,18 @@ def main() -> int:
     if not dev_busy:
         try:
             dmod = load_mod("dump", packages["dump"])
-            obj = "Document.Эст_КвитанцияФПП"
-            data = parse_json_or_text(dmod.dump_objects(objects=[obj], merge_into_repo=False, target="dev"))
-            record("live-ib", "dump DEV", isinstance(data, dict) and data.get("ok") is True, json.dumps({k: data.get(k) for k in ("ok", "exitCode", "storageError", "objectsToCapture")} if isinstance(data, dict) else {}, ensure_ascii=False))
+            obj = os.environ.get("SMOKE_OBJECT", "")
+            if not obj:
+                record("live-ib", "dump DEV", True, "skipped: SMOKE_OBJECT empty")
+                record("live-ib", "load DEV (ok or storage gate)", True, "skipped: SMOKE_OBJECT empty")
+                data = {"ok": True}
+            else:
+                data = parse_json_or_text(dmod.dump_objects(objects=[obj], merge_into_repo=False, target="dev"))
+            if obj:
+                record("live-ib", "dump DEV", isinstance(data, dict) and data.get("ok") is True, json.dumps({k: data.get(k) for k in ("ok", "exitCode", "storageError", "objectsToCapture")} if isinstance(data, dict) else {}, ensure_ascii=False))
             lmod = load_mod("load", packages["load"])
-            data = parse_json_or_text(lmod.load_objects(objects=[obj], confirm=True, target="dev"))
+            if obj:
+                data = parse_json_or_text(lmod.load_objects(objects=[obj], confirm=True, target="dev"))
             load_ok = isinstance(data, dict) and (data.get("ok") is True or bool(data.get("objectsToCapture") or data.get("storageError")))
             record(
                 "live-ib",

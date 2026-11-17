@@ -66,7 +66,7 @@ def _ibases_v8i_paths() -> dict[str, str]:
 
 
 def ib_name_for_path(ib_path: str | Path) -> str | None:
-    """Reverse lookup: file IB path -> list title in ibases.v8i (e.g. ERP КОПИЯ)."""
+    """Reverse lookup: file IB path -> list title in ibases.v8i."""
     needle = _norm(ib_path)
     for name, file_path in _ibases_v8i_paths().items():
         if _norm(file_path) == needle:
@@ -104,13 +104,13 @@ def _cmdline_matches_ib(cmdline: str, ib_path: str | Path) -> bool:
     - Full /F path equals ib_path (path-token boundary)
     - /IBName maps via ibases.v8i to the same path
 
-    Do NOT match by parent folder or bare "InfoBase" substring — that cross-hits
-    InfoBase / InfoBase2 / InfoBase3 under the same Documents folder.
+    Do NOT match by parent folder or a shared name prefix — sibling folders
+    under the same parent must not cross-match.
     """
     needle = _norm(ib_path)
     cmd = cmdline or ""
     # Parse /IBName before _strip_cmd_quotes — strip removes inner quotes and
-    # turns /IBName"ERP КОПИЯ" into /IBNameERP КОПИЯ (unparseable).
+    # turns /IBName"Work title" into /IBNameWork title (unparseable).
     name = _ibname_from_cmdline(cmd)
     if name:
         mapping = _ibases_v8i_paths()

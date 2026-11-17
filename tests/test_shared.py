@@ -39,10 +39,10 @@ def test_bsl_units_and_callgraph(tmp_path: Path):
     assert found is not None
     assert "КонецПроцедуры" in found[1]
 
-    mod = tmp_path / "CommonModules" / "Эст_X" / "Ext"
+    mod = tmp_path / "CommonModules" / "Vendor_X" / "Ext"
     mod.mkdir(parents=True)
     (mod / "Module.bsl").write_text(sample, encoding="utf-8")
-    idx = rebuild_graph([tmp_path], prefixes=["Эст_"])
+    idx = rebuild_graph([tmp_path], prefixes=["Vendor_"])
     assert idx["ok"] is True
     assert idx["moduleCount"] == 1
     callees = query_edges(idx, unit="Альфа", direction="callees")
@@ -50,9 +50,9 @@ def test_bsl_units_and_callgraph(tmp_path: Path):
 
 
 def test_normalize_object_name_ru():
-    assert normalize_object_name("Документ.Эст_Выпуск") == "Document.Эст_Выпуск"
+    assert normalize_object_name("Документ.Vendor_Doc") == "Document.Vendor_Doc"
     assert normalize_object_name("Document.Foo") == "Document.Foo"
-    assert normalize_object_name("ОбщийМодуль.Эст_Дополнительно") == "CommonModule.Эст_Дополнительно"
+    assert normalize_object_name("ОбщийМодуль.Vendor_Common") == "CommonModule.Vendor_Common"
 
 
 def test_object_to_list_entry_configuration_load():
@@ -61,8 +61,8 @@ def test_object_to_list_entry_configuration_load():
     assert object_to_list_entry("Configuration", for_load=False) == "Configuration"
     assert object_to_list_entry("Document.A", for_load=True) == "Documents/A.xml"
     assert (
-        object_to_list_entry("Document.ПроизводствоБезЗаказа.Form.Эст_ПБЗ_Мини_ГруппаЗакрепки", for_load=True)
-        == "Documents/ПроизводствоБезЗаказа/Forms/Эст_ПБЗ_Мини_ГруппаЗакрепки.xml"
+        object_to_list_entry("Document.ПроизводствоБезЗаказа.Form.Vendor_FormMini", for_load=True)
+        == "Documents/ПроизводствоБезЗаказа/Forms/Vendor_FormMini.xml"
     )
     assert (
         object_to_list_entry("Document.X.Form.Y", for_load=False) == "Document.X.Form.Y"
@@ -124,12 +124,12 @@ def test_parse_storage_get_required():
 
     log = (
         "! Для выполнения операции требуется получение объектов:\n"
-        "| Документ.Эст_Выпуск\n"
+        "| Документ.Vendor_Doc\n"
         "----- Операция с хранилищем конфигурации отменена -----"
     )
-    need, objs = parse_storage_get_required(log, ["Document.Эст_Выпуск", "Document.Other"])
+    need, objs = parse_storage_get_required(log, ["Document.Vendor_Doc", "Document.Other"])
     assert need is True
-    assert "Document.Эст_Выпуск" in objs
+    assert "Document.Vendor_Doc" in objs
 
 
 def test_is_storage_offline_and_access():
@@ -173,20 +173,20 @@ def test_merge_copy(tmp_path: Path):
 
 
 def test_cmdline_matches_ib_exact_name(monkeypatch: pytest.MonkeyPatch):
-    """Prefix IB titles must not cross-match (ERP КОПИЯ vs ERP КОПИЯ запасная)."""
+    """Prefix IB titles must not cross-match (WORK vs WORK spare)."""
     from onec_mcp_shared import session as sess
 
     mapping = {
-        "ERP КОПИЯ": r"C:\Users\rubinshtein\Documents\InfoBase3",
-        "ERP КОПИЯ запасная": r"C:\Users\rubinshtein\Documents\InfoBase2",
+        "WORK": r"C:\ib\Work",
+        "WORK spare": r"C:\ib\Dev",
     }
     monkeypatch.setattr(sess, "_ibases_v8i_paths", lambda: mapping)
-    cmd_work = r'DESIGNER /IBName "ERP КОПИЯ"'
-    cmd_dev = r'DESIGNER /IBName "ERP КОПИЯ запасная" /Lru'
-    assert sess._cmdline_matches_ib(cmd_dev, mapping["ERP КОПИЯ запасная"])
-    assert not sess._cmdline_matches_ib(cmd_dev, mapping["ERP КОПИЯ"])
-    assert sess._cmdline_matches_ib(cmd_work, mapping["ERP КОПИЯ"])
-    assert not sess._cmdline_matches_ib(cmd_work, mapping["ERP КОПИЯ запасная"])
+    cmd_work = r'DESIGNER /IBName "WORK"'
+    cmd_dev = r'DESIGNER /IBName "WORK spare" /Lru'
+    assert sess._cmdline_matches_ib(cmd_dev, mapping["WORK spare"])
+    assert not sess._cmdline_matches_ib(cmd_dev, mapping["WORK"])
+    assert sess._cmdline_matches_ib(cmd_work, mapping["WORK"])
+    assert not sess._cmdline_matches_ib(cmd_work, mapping["WORK spare"])
 
 
 def test_cmdline_does_not_cross_match_infobase_siblings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -236,12 +236,12 @@ def test_ib_name_for_path(monkeypatch: pytest.MonkeyPatch):
     from onec_mcp_shared import session as sess
 
     mapping = {
-        "ERP КОПИЯ": r"C:\Users\rubinshtein\Documents\InfoBase3",
-        "ERP КОПИЯ запасная": r"C:\Users\rubinshtein\Documents\InfoBase2",
+        "WORK": r"C:\ib\Work",
+        "WORK spare": r"C:\ib\Dev",
     }
     monkeypatch.setattr(sess, "_ibases_v8i_paths", lambda: mapping)
-    assert sess.ib_name_for_path(mapping["ERP КОПИЯ"]) == "ERP КОПИЯ"
-    assert sess.ib_name_for_path(mapping["ERP КОПИЯ запасная"]) == "ERP КОПИЯ запасная"
+    assert sess.ib_name_for_path(mapping["WORK"]) == "WORK"
+    assert sess.ib_name_for_path(mapping["WORK spare"]) == "WORK spare"
     assert sess.ib_name_for_path(r"C:\nope") is None
 
 
@@ -264,16 +264,16 @@ def test_storage_cli_empty_password_not_ib_fallback(monkeypatch: pytest.MonkeyPa
     """Empty storage password: omit /P (Designer auth); never use ONEC_PASSWORD_WORK."""
     from onec_mcp_shared import session as sess
 
-    monkeypatch.setenv("ONEC_STORAGE_PATH", r"\\1cmini\ХранилищеЕрп5_23\\")
-    monkeypatch.setenv("ONEC_STORAGE_USER", "РубинштейнА")
+    monkeypatch.setenv("ONEC_STORAGE_PATH", r"\\server\storage\\")
+    monkeypatch.setenv("ONEC_STORAGE_USER", "StorageUser")
     monkeypatch.setenv("ONEC_STORAGE_PASSWORD", "")
-    monkeypatch.setenv("ONEC_PASSWORD_WORK", "123321")
+    monkeypatch.setenv("ONEC_PASSWORD_WORK", "not-the-storage-password")
     args = sess.storage_cli_args()
     assert "/ConfigurationRepositoryN" in args
-    assert "РубинштейнА" in args
+    assert "StorageUser" in args
     # Empty password: flag omitted (some builds treat empty /P as auth failure).
     assert "/ConfigurationRepositoryP" not in args
-    assert "123321" not in args
+    assert "not-the-storage-password" not in args
 
 
 def test_write_storage_objects_file(tmp_path: Path):
@@ -281,13 +281,13 @@ def test_write_storage_objects_file(tmp_path: Path):
 
     p = tmp_path / "objects.xml"
     write_storage_objects_file(
-        ["Document.Эст_КвитанцияФПП", "Configuration"],
+        ["Document.Vendor_Receipt", "Configuration"],
         p,
         include_child_objects=True,
     )
     text = p.read_text(encoding="utf-8")
     assert 'xmlns="http://v8.1c.ru/8.3/config/objects"' in text
-    assert 'fullName="Document.Эст_КвитанцияФПП"' in text
+    assert 'fullName="Document.Vendor_Receipt"' in text
     assert 'includeChildObjects="true"' in text
     assert "<Configuration " in text
     assert not text.startswith("\ufeff")
@@ -375,10 +375,10 @@ def test_aligned_per_object_does_not_clobber(tmp_path: Path, monkeypatch: pytest
     from onec_mcp_shared import work_gates as wg
 
     monkeypatch.setenv("DUMP_TMP_ROOT", str(tmp_path))
-    wg.write_aligned_marker(["CommonModule.A"], target="work", extension="Эстет")
-    wg.write_aligned_marker(["CommonModule.B"], target="work", extension="Эстет")
-    assert wg.check_storage_aligned(["CommonModule.A"], target="work", extension="Эстет", storage_aligned=True) is None
-    assert wg.check_storage_aligned(["CommonModule.B"], target="work", extension="Эстет", storage_aligned=True) is None
+    wg.write_aligned_marker(["CommonModule.A"], target="work", extension="Ext")
+    wg.write_aligned_marker(["CommonModule.B"], target="work", extension="Ext")
+    assert wg.check_storage_aligned(["CommonModule.A"], target="work", extension="Ext", storage_aligned=True) is None
+    assert wg.check_storage_aligned(["CommonModule.B"], target="work", extension="Ext", storage_aligned=True) is None
 
 
 def test_lock_does_not_substitute_for_get_alignment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -386,22 +386,22 @@ def test_lock_does_not_substitute_for_get_alignment(tmp_path: Path, monkeypatch:
 
     monkeypatch.setenv("DUMP_TMP_ROOT", str(tmp_path))
     objs = ["CommonModule.ПроизводствоБезЗаказаЛокализация"]
-    wg.write_lock_receipt(objs, target="work", extension="Эстет")
+    wg.write_lock_receipt(objs, target="work", extension="Ext")
     assert (
         wg.check_storage_aligned(
-            objs, target="work", extension="Эстет", storage_aligned=False
+            objs, target="work", extension="Ext", storage_aligned=False
         )
         is not None
     )
-    assert wg.refuse_get_captured(objs, target="work", extension="Эстет") is not None
-    assert wg.refuse_get_captured(objs, target="work", extension="Эстет", confirm_get_captured=True) is None
+    assert wg.refuse_get_captured(objs, target="work", extension="Ext") is not None
+    assert wg.refuse_get_captured(objs, target="work", extension="Ext", confirm_get_captured=True) is None
 
 
 def test_lock_receipt_is_task_bound(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from onec_mcp_shared import work_gates as wg
 
     monkeypatch.setenv("DUMP_TMP_ROOT", str(tmp_path))
-    objs = ["Document.Эст_Выпуск.Form.ФормаДокумента"]
+    objs = ["Document.Vendor_Doc.Form.ФормаДокумента"]
     wg.write_lock_receipt(objs, target="work", extension=None, task="1359")
 
     assert (
@@ -519,13 +519,13 @@ def test_cmdline_matches_ib_guillemet_quotes(monkeypatch: pytest.MonkeyPatch):
     from onec_mcp_shared import session as sess
 
     mapping = {
-        "ERP КОПИЯ": r"C:\Users\rubinshtein\Documents\InfoBase3",
-        "ERP КОПИЯ запасная": r"C:\Users\rubinshtein\Documents\InfoBase2",
+        "WORK": r"C:\ib\Work",
+        "WORK spare": r"C:\ib\Dev",
     }
     monkeypatch.setattr(sess, "_ibases_v8i_paths", lambda: mapping)
-    cmd = "DESIGNER /IBName «ERP КОПИЯ» /Lru"
-    assert sess._cmdline_matches_ib(cmd, mapping["ERP КОПИЯ"])
-    assert not sess._cmdline_matches_ib(cmd, mapping["ERP КОПИЯ запасная"])
+    cmd = "DESIGNER /IBName «WORK» /Lru"
+    assert sess._cmdline_matches_ib(cmd, mapping["WORK"])
+    assert not sess._cmdline_matches_ib(cmd, mapping["WORK spare"])
 
 
 def test_designer_busy_payload_empty_log():
@@ -748,7 +748,7 @@ def test_storage_dump_version_extracts_with_valid_file_connection(
             module_path = (
                 extracted
                 / "Documents"
-                / "Эст_Выпуск"
+                / "Vendor_Doc"
                 / "Forms"
                 / "ФормаДокумента"
                 / "Ext"
@@ -767,7 +767,7 @@ def test_storage_dump_version_extracts_with_valid_file_connection(
         module.storage_dump_version(
             version=1193,
             output_path=str(out),
-            objects=["Document.Эст_Выпуск.Form.ФормаДокумента"],
+            objects=["Document.Vendor_Doc.Form.ФормаДокумента"],
             extract_dir=str(extracted),
             keep_configuration=True,
         )

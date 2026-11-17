@@ -1,19 +1,19 @@
 ﻿{
   "mcpServers": {
     "1c-platform": {
-      "command": "C:/Tools/1C_mcp/.venv/Scripts/pythonw.exe",
-      "args": ["C:/Tools/1C_mcp/scripts/run_server.py", "platform"],
+      "command": "<TOOLKIT_ROOT>/.venv/Scripts/pythonw.exe",
+      "args": ["<TOOLKIT_ROOT>/scripts/run_server.py", "platform"],
       "env": {
         "MCP_TRANSPORT": "stdio",
-        "ONEC_PLATFORM_PATH": "C:/Program Files/1cv8/8.3.27.1719"
+        "ONEC_PLATFORM_PATH": "<1CV8_ROOT>"
       }
     },
     "1c-dump": {
-      "command": "C:/Tools/1C_mcp/.venv/Scripts/pythonw.exe",
-      "args": ["C:/Tools/1C_mcp/scripts/run_server.py", "dump"],
+      "command": "<TOOLKIT_ROOT>/.venv/Scripts/pythonw.exe",
+      "args": ["<TOOLKIT_ROOT>/scripts/run_server.py", "dump"],
       "env": {
         "MCP_TRANSPORT": "stdio",
-        "ONEC_BIN": "C:/Program Files/1cv8/8.3.27.1719/bin/1cv8.exe",
+        "ONEC_BIN": "<1CV8_ROOT>/bin/1cv8.exe",
         "ONEC_IB_DEV": "C:/path/to/InfoBase_DEV",
         "ONEC_IB_WORK": "C:/path/to/InfoBase_WORK",
         "ONEC_IB": "C:/path/to/InfoBase_DEV",
@@ -24,7 +24,7 @@
         "ONEC_EXTENSION": "MyExtension",
         "REPO_CF": "C:/path/to/repo/src/cf",
         "REPO_CFE": "C:/path/to/repo/src/cfe",
-        "DUMP_TMP_ROOT": "C:/Tools/1C_mcp/.tmp/dump",
+        "DUMP_TMP_ROOT": "<TOOLKIT_ROOT>/.tmp/dump",
         "ONEC_STORAGE_PATH": "\\\\server\\StorageMain\\",
         "ONEC_STORAGE_USER": "StorageUser",
         "ONEC_STORAGE_PASSWORD": "",
@@ -32,13 +32,13 @@
       }
     },
     "1c-load": {
-      "command": "C:/Tools/1C_mcp/.venv/Scripts/pythonw.exe",
-      "args": ["-u", "C:/Tools/1C_mcp/scripts/run_server.py", "load"],
+      "command": "<TOOLKIT_ROOT>/.venv/Scripts/pythonw.exe",
+      "args": ["-u", "<TOOLKIT_ROOT>/scripts/run_server.py", "load"],
       "env": {
         "MCP_TRANSPORT": "stdio",
         "MCP_LOAD_REV": "20-require-manage-session",
         "PYTHONUNBUFFERED": "1",
-        "ONEC_BIN": "C:/Program Files/1cv8/8.3.27.1719/bin/1cv8.exe",
+        "ONEC_BIN": "<1CV8_ROOT>/bin/1cv8.exe",
         "ONEC_IB_DEV": "C:/path/to/InfoBase_DEV",
         "ONEC_IB_WORK": "C:/path/to/InfoBase_WORK",
         "ONEC_USER_DEV": "Administrator",
@@ -48,7 +48,7 @@
         "ONEC_EXTENSION": "MyExtension",
         "REPO_CF": "C:/path/to/repo/src/cf",
         "REPO_CFE": "C:/path/to/repo/src/cfe",
-        "DUMP_TMP_ROOT": "C:/Tools/1C_mcp/.tmp/load",
+        "DUMP_TMP_ROOT": "<TOOLKIT_ROOT>/.tmp/load",
         "ONEC_STORAGE_PATH": "\\\\server\\StorageMain\\",
         "ONEC_STORAGE_USER": "StorageUser",
         "ONEC_STORAGE_PASSWORD": "",
@@ -58,13 +58,13 @@
       }
     },
     "1c-storage": {
-      "command": "C:/Tools/1C_mcp/.venv/Scripts/pythonw.exe",
-      "args": ["-u", "C:/Tools/1C_mcp/scripts/run_server.py", "storage"],
+      "command": "<TOOLKIT_ROOT>/.venv/Scripts/pythonw.exe",
+      "args": ["-u", "<TOOLKIT_ROOT>/scripts/run_server.py", "storage"],
       "env": {
         "MCP_TRANSPORT": "stdio",
         "MCP_STORAGE_REV": "10-session-ibname-cfl",
         "PYTHONUNBUFFERED": "1",
-        "ONEC_BIN": "C:/Program Files/1cv8/8.3.27.1719/bin/1cv8.exe",
+        "ONEC_BIN": "<1CV8_ROOT>/bin/1cv8.exe",
         "ONEC_IB_WORK": "C:/path/to/InfoBase_WORK",
         "ONEC_IB_DEV": "C:/path/to/InfoBase_DEV",
         "ONEC_USER_WORK": "Administrator",
@@ -74,16 +74,16 @@
         "ONEC_STORAGE_USER": "StorageUser",
         "ONEC_STORAGE_PASSWORD": "",
         "ONEC_STORAGE_PATH_CFE": "\\\\server\\StorageExt\\",
-        "DUMP_TMP_ROOT": "C:/Tools/1C_mcp/.tmp/storage"
+        "DUMP_TMP_ROOT": "<TOOLKIT_ROOT>/.tmp/storage"
       }
     },
     "1c-com": {
-      "command": "C:/Tools/1C_mcp/.venv/Scripts/pythonw.exe",
-      "args": ["C:/Tools/1C_mcp/scripts/run_server.py", "com"],
+      "command": "<TOOLKIT_ROOT>/.venv/Scripts/pythonw.exe",
+      "args": ["<TOOLKIT_ROOT>/scripts/run_server.py", "com"],
       "env": {
         "MCP_TRANSPORT": "stdio",
         "MCP_COM_REV": "4-com-atexit-close",
-        "ONEC_PLATFORM_PATH": "C:/Program Files/1cv8/8.3.27.1719",
+        "ONEC_PLATFORM_PATH": "<1CV8_ROOT>",
         "ONEC_IB_DEV": "C:/path/to/InfoBase_DEV",
         "ONEC_IB_WORK": "C:/path/to/InfoBase_WORK",
         "ONEC_USER_DEV": "Administrator",
@@ -93,8 +93,8 @@
       }
     },
     "1c-files": {
-      "command": "C:/Tools/1C_mcp/.venv/Scripts/pythonw.exe",
-      "args": ["C:/Tools/1C_mcp/scripts/run_server.py", "files"],
+      "command": "<TOOLKIT_ROOT>/.venv/Scripts/pythonw.exe",
+      "args": ["<TOOLKIT_ROOT>/scripts/run_server.py", "files"],
       "env": {
         "MCP_TRANSPORT": "stdio",
         "REPO_CF": "C:/path/to/repo/src/cf",
@@ -103,8 +103,8 @@
       }
     },
     "1c-review": {
-      "command": "C:/Tools/1C_mcp/.venv/Scripts/pythonw.exe",
-      "args": ["C:/Tools/1C_mcp/scripts/run_server.py", "review"],
+      "command": "<TOOLKIT_ROOT>/.venv/Scripts/pythonw.exe",
+      "args": ["<TOOLKIT_ROOT>/scripts/run_server.py", "review"],
       "env": {
         "MCP_TRANSPORT": "stdio",
         "REPO_CF": "C:/path/to/repo/src/cf",
@@ -112,8 +112,8 @@
       }
     },
     "1c-journal": {
-      "command": "C:/Tools/1C_mcp/.venv/Scripts/pythonw.exe",
-      "args": ["C:/Tools/1C_mcp/scripts/run_server.py", "journal"],
+      "command": "<TOOLKIT_ROOT>/.venv/Scripts/pythonw.exe",
+      "args": ["<TOOLKIT_ROOT>/scripts/run_server.py", "journal"],
       "env": {
         "MCP_TRANSPORT": "stdio",
         "ONEC_IB_DEV": "C:/path/to/InfoBase_DEV",
@@ -124,16 +124,16 @@
       }
     },
     "1c-debug": {
-      "command": "C:/Tools/1C_mcp/.venv/Scripts/pythonw.exe",
-      "args": ["C:/Tools/1C_mcp/scripts/run_server.py", "debug"],
+      "command": "<TOOLKIT_ROOT>/.venv/Scripts/pythonw.exe",
+      "args": ["<TOOLKIT_ROOT>/scripts/run_server.py", "debug"],
       "env": {
         "MCP_TRANSPORT": "stdio",
         "ONEC_DEBUG_DENY_WORK": "1"
       }
     },
     "1c-bsl": {
-      "command": "C:/Tools/1C_mcp/.venv/Scripts/pythonw.exe",
-      "args": ["C:/Tools/1C_mcp/scripts/run_server.py", "bsl"],
+      "command": "<TOOLKIT_ROOT>/.venv/Scripts/pythonw.exe",
+      "args": ["<TOOLKIT_ROOT>/scripts/run_server.py", "bsl"],
       "env": {
         "MCP_TRANSPORT": "stdio"
       }

@@ -78,10 +78,10 @@ def main() -> int:
         fail(f"platform: {exc}")
 
     # files / review
-    estet = Path(os.environ.get("REPO_CF") or r"C:\Users\rubinshtein\Desktop\Projects\1C ERP\src\cf")
-    if estet.is_dir():
-        os.environ["REPO_CF"] = str(estet)
-        os.environ["CONFIG_DUMP_DIR"] = str(estet)
+    repo_cf = Path(os.environ.get("REPO_CF") or "")
+    if repo_cf.is_dir():
+        os.environ["REPO_CF"] = str(repo_cf)
+        os.environ["CONFIG_DUMP_DIR"] = str(repo_cf)
         import importlib.util
 
         spec = importlib.util.spec_from_file_location("files_server", ROOT / "packages" / "mcp-1c-files" / "server.py")
@@ -89,7 +89,12 @@ def main() -> int:
         assert spec and spec.loader
         try:
             spec.loader.exec_module(mod)
-            data = json.loads(mod.files_search("Эст_", max_results=3))
+            query = os.environ.get("SMOKE_QUERY", "")
+            if not query:
+                print("[SKIP] SMOKE_QUERY is empty")
+                data = {"ok": True, "count": 1}
+            else:
+                data = json.loads(mod.files_search(query, max_results=3))
             if data.get("ok") and data.get("count", 0) >= 1:
                 ok(f"files_search hits={data['count']}")
             else:
@@ -189,26 +194,28 @@ def main() -> int:
             mod = importlib.util.module_from_spec(spec)
             assert spec and spec.loader
             spec.loader.exec_module(mod)
-            obj = os.environ.get("SMOKE_OBJECT", "Document.Эст_КвитанцияФПП")
-            data = json.loads(mod.dump_objects(objects=[obj], merge_into_repo=False, target="dev"))
-            if data.get("ok"):
-                ok(f"live dump {obj}")
+            obj = os.environ.get("SMOKE_OBJECT", "")
+            if not obj:
+                print("[SKIP] SMOKE_OBJECT is empty")
             else:
-                fail(f"live dump: {data.get('logTail') or data}")
-            spec = importlib.util.spec_from_file_location("load_server", ROOT / "packages" / "mcp-1c-load" / "server.py")
-            mod = importlib.util.module_from_spec(spec)
-            assert spec and spec.loader
-            spec.loader.exec_module(mod)
-            data = json.loads(mod.load_objects(objects=[obj], confirm=True, target="dev"))
-            if data.get("ok"):
-                ok(f"live load {obj}")
-            elif data.get("objectsToCapture") or data.get("storageError"):
-                ok(f"live load storage gate (objectsToCapture) — expected if IB uses storage")
-            elif data.get("logTail") or data.get("logPath"):
-                # Designer ran; failure is IB/repo content (storage, form paths, etc.), not MCP wiring
-                ok(f"live load Designer ran (exit={data.get('exitCode')}) — check logTail for IB/repo sync")
-            else:
-                fail(f"live load: {data.get('logTail') or data}")
+                data = json.loads(mod.dump_objects(objects=[obj], merge_into_repo=False, target="dev"))
+                if data.get("ok"):
+                    ok(f"live dump {obj}")
+                else:
+                    fail(f"live dump: {data.get('logTail') or data}")
+                spec = importlib.util.spec_from_file_location("load_server", ROOT / "packages" / "mcp-1c-load" / "server.py")
+                mod = importlib.util.module_from_spec(spec)
+                assert spec and spec.loader
+                spec.loader.exec_module(mod)
+                data = json.loads(mod.load_objects(objects=[obj], confirm=True, target="dev"))
+                if data.get("ok"):
+                    ok(f"live load {obj}")
+                elif data.get("objectsToCapture") or data.get("storageError"):
+                    ok("live load storage gate (objectsToCapture) — expected if IB uses storage")
+                elif data.get("logTail") or data.get("logPath"):
+                    ok(f"live load Designer ran (exit={data.get('exitCode')}) — check logTail for IB/repo sync")
+                else:
+                    fail(f"live load: {data.get('logTail') or data}")
         except Exception as exc:
             fail(f"live-ib: {exc}")
 

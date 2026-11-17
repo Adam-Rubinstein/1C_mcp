@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 from pathlib import Path
@@ -25,11 +26,10 @@ _UUID_RE = re.compile(
 _CHILD_RE = re.compile(r"<ChildObjects>(.*?)</ChildObjects>", re.DOTALL | re.IGNORECASE)
 _CHILD_ITEM_RE = re.compile(r"<([A-Za-z][A-Za-z0-9_]*)>([^<]+)</\1>")
 
-# Minimal markers that a full ERP Estet dump should keep
-_REQUIRED_MARKERS = (
-    "ЭСТ_РабочийСтолСклад",
-    "Эст_Выпуск",
-)
+def _required_markers() -> tuple[str, ...]:
+    """Optional ChildObjects names from ONEC_ROOT_MARKERS (comma-separated)."""
+    raw = os.environ.get("ONEC_ROOT_MARKERS", "")
+    return tuple(part.strip() for part in raw.split(",") if part.strip())
 
 
 def includes_configuration_root(objects: list[str]) -> bool:
@@ -99,7 +99,7 @@ def sanity_check_configuration(
 ) -> dict[str, Any]:
     """
     Fail if candidate looks truncated vs baseline dump from the same IB,
-    or missing required Estet markers.
+    or missing names listed in ONEC_ROOT_MARKERS.
     """
     errors: list[str] = []
     if not candidate.is_file():
@@ -109,13 +109,13 @@ def sanity_check_configuration(
     cand_count = child_objects_count(candidate)
     names = child_object_names(candidate)
     raw = candidate.read_text(encoding="utf-8", errors="replace")
-    is_cfe_root = (
-        "<Name>Эстет_Доработки</Name>" in raw
-        or "<ConfigurationExtensionPurpose>" in raw
+    ext_name = os.environ.get("ONEC_EXTENSION", "").strip()
+    is_cfe_root = "<ConfigurationExtensionPurpose>" in raw or (
+        bool(ext_name) and f"<Name>{ext_name}</Name>" in raw
     )
 
     if not is_cfe_root:
-        for marker in _REQUIRED_MARKERS:
+        for marker in _required_markers():
             if marker not in names:
                 errors.append(f"missing ChildObjects marker: {marker}")
 
@@ -139,7 +139,7 @@ def sanity_check_configuration(
                     f"baseline={baseline_count} allow_extra={allow_extra_child}"
                 )
 
-    # Absolute floor — empty/tiny root is never OK for Estet ERP
+    # Absolute floor — an empty or tiny root is never OK
     min_children = 10 if is_cfe_root else 50
     if cand_count < min_children:
         errors.append(f"ChildObjects count too low: {cand_count} (min {min_children})")

@@ -7,7 +7,7 @@ Use this checklist when a user wants MCP servers for 1C development. **Ask only 
 
 ## Checklist questions
 
-1. **Platform install path** — directory like `C:/Program Files/1cv8/8.3.27.1719` (`ONEC_PLATFORM_PATH`, `ONEC_BIN=…/bin/1cv8.exe`).
+1. **Platform install path** — the platform directory (`ONEC_PLATFORM_PATH`, `ONEC_BIN=…/bin/1cv8.exe`).
 2. **Infobase** — file (`ONEC_IB`) or server (`ONEC_SERVER` + `ONEC_REF`).
 3. **IB user / password** (`ONEC_USER`, `ONEC_PASSWORD`).
 4. **Config dump roots** in the project (`REPO_CF`, `REPO_CFE`, `CONFIG_DUMP_DIR`).
@@ -106,16 +106,17 @@ Optional env: `MCP_STAGING_SECRET`, `MCP_GATE_TTL_SEC`, `ALLOW_ENTIRE_STORAGE_OP
 
 Bump `MCP_LOAD_REV` / `MCP_STORAGE_REV` / `MCP_COM_REV` after toolkit update so Cursor reloads tool schemas.
 
-## Estet example (illustrative only)
-
-Do **not** commit:
+## Local example (do not commit)
 
 ```text
-ONEC_IB=C:\Users\…\InfoBase2
-ONEC_USER=Администратор
-ONEC_EXTENSION=Эстет_Доработки
+ONEC_IB=C:\Users\…\InfoBaseDev
+ONEC_USER=Administrator
+ONEC_EXTENSION=<extension name>
 REPO_CF=…/src/cf
 REPO_CFE=…/src/cfe
+ONEC_ROOT_MARKERS=
+ONEC_CHANGE_MARKERS=
+UI_TITLE_MUST=<WORK window title>
 ```
 
-Extension name and prefixes are project-specific; read the project profile in the user's repo.
+Extension name, prefixes, root markers and the window title are project-specific. Read them from the project profile. Do not put customer names in this repository.

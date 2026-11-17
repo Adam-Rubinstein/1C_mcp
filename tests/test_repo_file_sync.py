@@ -20,24 +20,24 @@ from onec_mcp_shared.repo_file_sync import (
 REPORT = """\
 Версия:\t10
 \tИзменены\t2
-\tДокумент.Эст_Выпуск
+\tДокумент.Vendor_Doc
 \tУправлениеПредприятием
 
 Версия:\t11
 \tУдалены\t1
-\tОбработка.Эст_Старая
+\tОбработка.Vendor_Old
 
 Версия:\t12
 \tИзменены\t1
-\tДокумент.Эст_Выпуск
+\tДокумент.Vendor_Doc
 """
 
 
 def test_parse_storage_report_range_skips_configuration_root() -> None:
     parsed = parse_storage_report(REPORT, n_begin=11)
     assert parsed["tipVersion"] == 12
-    assert parsed["changedObjects"] == ["Документ.Эст_Выпуск"]
-    assert parsed["deletedObjects"] == ["Обработка.Эст_Старая"]
+    assert parsed["changedObjects"] == ["Документ.Vendor_Doc"]
+    assert parsed["deletedObjects"] == ["Обработка.Vendor_Old"]
 
 
 def test_parse_storage_report_tip_only() -> None:
@@ -48,9 +48,9 @@ def test_parse_storage_report_tip_only() -> None:
 
 
 def test_object_output_paths_document() -> None:
-    paths = object_output_paths("Документ.Эст_Выпуск")
-    assert Path("Documents/Эст_Выпуск.xml") in paths
-    assert Path("Documents/Эст_Выпуск") in paths
+    paths = object_output_paths("Документ.Vendor_Doc")
+    assert Path("Documents/Vendor_Doc.xml") in paths
+    assert Path("Documents/Vendor_Doc") in paths
     assert object_output_paths("УправлениеПредприятием") == []
 
 
@@ -86,8 +86,8 @@ def test_storage_report_passes_version_range(monkeypatch: pytest.MonkeyPatch) ->
     assert "11" in seen["args"]
     assert "-NEnd" in seen["args"]
     assert payload["tipVersion"] == 12
-    assert payload["changedObjects"] == ["Документ.Эст_Выпуск"]
-    assert payload["deletedObjects"] == ["Обработка.Эст_Старая"]
+    assert payload["changedObjects"] == ["Документ.Vendor_Doc"]
+    assert payload["deletedObjects"] == ["Обработка.Vendor_Old"]
 
 
 def test_sync_files_refuses_open_designer(
@@ -106,7 +106,7 @@ def test_sync_files_refuses_open_designer(
     )
     payload = json.loads(
         server.sync_files_from_work(
-            objects=["Документ.Эст_Выпуск"],
+            objects=["Документ.Vendor_Doc"],
             target="work",
             tip_version=12,
         )

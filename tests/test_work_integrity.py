@@ -155,14 +155,14 @@ def test_removed_duplicate_form_event_binding_is_reported(tmp_path: Path) -> Non
     _write(
         baseline / rel_form,
         """<Form><Events>
-<Event name="OnCreateAtServer" callType="After">БИТ_ПриСозданииНаСервереПосле</Event>
-<Event name="OnCreateAtServer" callType="After">Эст_ПриСозданииНаСервереПосле</Event>
+<Event name="OnCreateAtServer" callType="After">Legacy_OnCreate</Event>
+<Event name="OnCreateAtServer" callType="After">Vendor_OnCreate</Event>
 </Events><Commands><Command name="Проверка" id="7"><Action>ОбработатьПроверку</Action></Command></Commands></Form>""",
     )
     _write(
         candidate / rel_form,
         """<Form><Events>
-<Event name="OnCreateAtServer" callType="After">Эст_ПриСозданииНаСервереПосле</Event>
+<Event name="OnCreateAtServer" callType="After">Vendor_OnCreate</Event>
 </Events><Commands><Command name="Проверка" id="7"/></Commands></Form>""",
     )
 
@@ -175,7 +175,7 @@ def test_removed_duplicate_form_event_binding_is_reported(tmp_path: Path) -> Non
     assert any(
         item["name"] == "OnCreateAtServer"
         and item["callType"] == "After"
-        and item["eventHandler"] == "БИТ_ПриСозданииНаСервереПосле"
+        and item["eventHandler"] == "Legacy_OnCreate"
         for item in manifest["removedFormElements"]
     )
     assert any(
@@ -187,7 +187,8 @@ def test_removed_duplicate_form_event_binding_is_reported(tmp_path: Path) -> Non
     assert manifest["hasRemovals"] is True
 
 
-def test_removed_bsl_unit_markers_and_executable_line(tmp_path: Path) -> None:
+def test_removed_bsl_unit_markers_and_executable_line(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ONEC_CHANGE_MARKERS", "Note,Vendor,Author,Legacy")
     baseline = tmp_path / "baseline"
     candidate = tmp_path / "candidate"
     for root in (baseline, candidate):
@@ -195,10 +196,10 @@ def test_removed_bsl_unit_markers_and_executable_line(tmp_path: Path) -> None:
     module = Path("CommonModules/Guard/Ext/Module.bsl")
     _write(
         baseline / module,
-        """// Eugene - important
-// Эстет - Рубинштейн - 17.09.2026 - 1246 - Проверка {
-//Таланцева - important
-// БИТ - important
+        """// Note - important
+// Vendor - Author - 17.09.2026 - 1 - Check {
+// Author - important
+// Legacy - important
 Процедура Удаленная()
     КритичноеЗначение = 42;
 КонецПроцедуры
@@ -224,10 +225,10 @@ def test_removed_bsl_unit_markers_and_executable_line(tmp_path: Path) -> None:
 
     assert any(item["name"] == "Удаленная" for item in manifest["removedBslUnits"])
     removed_marker_text = {item["text"] for item in manifest["removedMarkers"]}
-    assert "// Eugene - important" in removed_marker_text
-    assert any(text.startswith("// Эстет") for text in removed_marker_text)
-    assert "//Таланцева - important" in removed_marker_text
-    assert "// БИТ - important" in removed_marker_text
+    assert "// Note - important" in removed_marker_text
+    assert any(text.startswith("// Vendor") for text in removed_marker_text)
+    assert "// Author - important" in removed_marker_text
+    assert "// Legacy - important" in removed_marker_text
     assert any(
         item["normalized"] == "критичноезначение = 42 ;"
         and len(item["hash"]) == 64
@@ -279,7 +280,7 @@ def test_receipts_require_exact_objects_and_task(tmp_path: Path) -> None:
         objects,
         task="1246",
         target="work",
-        extension="Эстет",
+        extension="Ext",
         ts=1000,
     )
 
@@ -287,7 +288,7 @@ def test_receipts_require_exact_objects_and_task(tmp_path: Path) -> None:
         list(reversed(objects)),
         task="1246",
         target="work",
-        extension="Эстет",
+        extension="Ext",
     )
     assert receipt is not None
     assert receipt["objects"] == ["CommonModule.A", "Document.B"]
@@ -296,7 +297,7 @@ def test_receipts_require_exact_objects_and_task(tmp_path: Path) -> None:
         objects,
         task="1246",
         target="work",
-        extension="Эстет",
+        extension="Ext",
         now=1001,
         max_age_seconds=10,
     ) is None
@@ -304,7 +305,7 @@ def test_receipts_require_exact_objects_and_task(tmp_path: Path) -> None:
         ["Document.B"],
         task="1246",
         target="work",
-        extension="Эстет",
+        extension="Ext",
         now=1001,
         max_age_seconds=10,
     ) is not None
@@ -312,7 +313,7 @@ def test_receipts_require_exact_objects_and_task(tmp_path: Path) -> None:
         objects,
         task="9999",
         target="work",
-        extension="Эстет",
+        extension="Ext",
         now=1001,
         max_age_seconds=10,
     ) is not None
@@ -320,7 +321,7 @@ def test_receipts_require_exact_objects_and_task(tmp_path: Path) -> None:
         ["Document.B.Form.Y"],
         task="1246",
         target="work",
-        extension="Эстет",
+        extension="Ext",
         now=1001,
         max_age_seconds=10,
     ) is not None
