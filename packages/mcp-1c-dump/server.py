@@ -807,13 +807,17 @@ def dump_changes(
         return json_result({"ok": False, "error": f"ConfigDumpInfo.xml not found: {info}"})
     dump_dir = Path(target_dir) if target_dir else _tmp_root() / f"changes-{now_stamp()}"
     dump_dir.mkdir(parents=True, exist_ok=True)
+    # /Out must NOT live inside dump_dir: Designer then sees a non-empty folder and
+    # refuses DumpConfigToFiles -update before writing changes.
+    log_dir = _tmp_root() / f"changes-log-{now_stamp()}"
+    log_dir.mkdir(parents=True, exist_ok=True)
     args = ["/DumpConfigToFiles", str(dump_dir)]
     if ext_name:
         args.extend(["-Extension", ext_name])
     args.extend(["-update", "-configDumpInfoForChanges", str(info), "-Format", "Hierarchical"])
     result = run_designer(
         args,
-        work_dir=dump_dir,
+        work_dir=log_dir,
         objects=[],
         target=target,
         attach_storage=is_work_target(t),
@@ -827,6 +831,255 @@ def dump_changes(
         repo = env("REPO_CFE") if ext_name else env("REPO_CF")
         if repo:
             payload["mergeReport"] = merge_copy(dump_dir, Path(repo))
+    return json_result(payload)
+
+
+@mcp.tool()
+def sync_files_from_work(
+    objects: list[str] | None = None,
+    deleted_objects: list[str] | None = None,
+    extension: str | bool | None = None,
+    full_config: bool = False,
+    confirm_full: bool = False,
+    tip_version: int | None = None,
+    reopen_designer: bool = False,
+    target: str = "work",
+) -> str:
+    """Copy WORK IB files into src. No storage lock and no load receipt.
+
+    Does not close Configurator or Enterprise. Refuses while either is open or
+    another task holds an object lock. full_config is the one-time catch-up.
+    """
+    from onec_mcp_shared.config_root import configuration_ext_missing
+    from onec_mcp_shared.repo_file_sync import (
+        dirty_paths_under,
+        foreign_object_locks,
+        merge_stash_three_way,
+        metadata_names,
+        object_output_paths,
+        record_sync_tip,
+        remove_object_files,
+        stash_repo_dirty,
+        work_session_open,
+    )
+    from onec_mcp_shared.session import start_ib_session
+
+    t = (target or "work").strip().lower()
+    if not is_work_target(t):
+        return json_result(
+            {
+                "ok": False,
+                "error": "sync_files_from_work only reads the WORK infobase.",
+                "stop": True,
+            }
+        )
+    if full_config and not confirm_full:
+        return json_result(
+            {
+                "ok": False,
+                "error": "full_config=true requires confirm_full=true.",
+                "step": "require_confirm_full",
+                "stop": True,
+            }
+        )
+    try:
+        ib = resolve_ib(t)
+        require_storage_path()
+    except ValueError as exc:
+        return json_result({"ok": False, "error": str(exc), "stop": True})
+
+    ext_name = None
+    if extension is True:
+        ext_name = env("ONEC_EXTENSION")
+    elif isinstance(extension, str) and extension:
+        ext_name = extension
+    repo_value = env("REPO_CFE") if ext_name else env("REPO_CF")
+    if not repo_value:
+        return json_result({"ok": False, "error": "REPO_CF / REPO_CFE is not set", "stop": True})
+    repo = Path(repo_value)
+    side = "cfe" if ext_name else "cf"
+    canon = [normalize_object_name(obj) for obj in (objects or []) if (obj or "").strip()]
+    deleted = [
+        normalize_object_name(obj)
+        for obj in (deleted_objects or [])
+        if (obj or "").strip()
+    ]
+    if not full_config and not canon and not deleted:
+        if tip_version is None:
+            return json_result(
+                {
+                    "ok": False,
+                    "error": "Empty diff needs tip_version, or pass objects / full_config.",
+                    "stop": True,
+                }
+            )
+        marker = record_sync_tip(side=side, tip_version=int(tip_version))
+        return json_result(
+            {
+                "ok": True,
+                "emptyDiff": True,
+                "side": side,
+                "marker": marker,
+                "message": "No objects in the storage diff. Tip recorded, Designer was not started.",
+            }
+        )
+
+    open_sessions = work_session_open(ib)
+    if open_sessions:
+        return json_result(
+            {
+                "ok": False,
+                "error": "WORK Configurator or Enterprise is open. File sync will not close it.",
+                "step": "work_designer_busy",
+                "sessions": open_sessions,
+                "hint": "Wait until the other task finishes. Do not taskkill and do not force_close.",
+                "stop": True,
+            }
+        )
+    held = foreign_object_locks()
+    if held:
+        return json_result(
+            {
+                "ok": False,
+                "error": "Another task holds an object lock. File sync will not overwrite those files.",
+                "step": "object_held_by_other_task",
+                "held": held,
+                "hint": "Wait for the other task to finish. Do not close its Configurator.",
+                "stop": True,
+            }
+        )
+
+    dump_dir = _tmp_root() / f"filesync-{now_stamp()}"
+    dump_dir.mkdir(parents=True, exist_ok=True)
+    log_dir = _tmp_root() / f"filesync-log-{now_stamp()}"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    args = ["/DumpConfigToFiles", str(dump_dir), "-Format", "Hierarchical"]
+    if ext_name:
+        args.extend(["-Extension", ext_name])
+    if not full_config:
+        list_file = log_dir / "objects.txt"
+        write_list_file(canon, list_file)
+        args.extend(["-listFile", str(list_file)])
+    result = run_designer(
+        args,
+        work_dir=log_dir,
+        objects=canon,
+        target=t,
+        attach_storage=True,
+        extension_storage=bool(ext_name),
+        timeout_sec=10800 if full_config else 3600,
+    )
+    payload = result.to_dict()
+    payload["dumpDir"] = str(dump_dir)
+    payload["side"] = side
+    payload["fullConfig"] = full_config
+    if not payload.get("ok"):
+        payload["message"] = (
+            "File sync dump did not finish. Local files were not changed. "
+            "Do not retry while Designer is still running."
+        )
+        payload["stop"] = True
+        return json_result(payload)
+    if full_config and not ext_name:
+        missing_ext = configuration_ext_missing(dump_dir)
+        if missing_ext:
+            return json_result(
+                {
+                    "ok": False,
+                    "error": "Full configuration dump has no Ext/. src/cf was not changed.",
+                    "step": "fix_configuration_ext_incomplete",
+                    "missingExt": missing_ext,
+                    "dumpDir": str(dump_dir),
+                    "stop": True,
+                }
+            )
+    if full_config and not (dump_dir / "ConfigDumpInfo.xml").is_file():
+        return json_result(
+            {
+                "ok": False,
+                "error": "Full dump has no ConfigDumpInfo.xml. src was not changed.",
+                "dumpDir": str(dump_dir),
+                "stop": True,
+            }
+        )
+
+    dump_rels = {
+        str(path.relative_to(dump_dir)).replace("\\", "/")
+        for path in dump_dir.rglob("*")
+        if path.is_file() and path.name.lower() != "designer.out"
+    }
+    removed_names = list(deleted)
+    if full_config:
+        old_names = metadata_names(repo / "ConfigDumpInfo.xml")
+        new_names = metadata_names(dump_dir / "ConfigDumpInfo.xml")
+        if old_names and new_names:
+            removed_names.extend(sorted(old_names - new_names))
+    git_root_result = run_git(
+        ["-C", str(repo), "rev-parse", "--show-toplevel"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    if git_root_result.returncode != 0:
+        return json_result(
+            {"ok": False, "error": "Repo is not inside a git worktree.", "stop": True}
+        )
+    git_root = Path(git_root_result.stdout.strip())
+    repo_prefix = repo.resolve().relative_to(git_root.resolve()).as_posix()
+    incoming = {f"{repo_prefix}/{rel}" for rel in dump_rels}
+    for name in removed_names:
+        for relative in object_output_paths(name):
+            incoming.add(f"{repo_prefix}/{relative.as_posix()}")
+    dirty = [
+        path
+        for path in dirty_paths_under(repo)
+        if any(
+            path == item or path.startswith(item.rstrip("/") + "/") or item.startswith(path + "/")
+            for item in incoming
+        )
+    ]
+    stash_dir = None
+    if dirty:
+        try:
+            stash_dir = stash_repo_dirty(repo, dirty)
+        except (OSError, RuntimeError) as exc:
+            return json_result(
+                {
+                    "ok": False,
+                    "error": f"Failed to stash local edits before file sync: {exc}",
+                    "step": "refuse_dirty_repo",
+                    "stop": True,
+                }
+            )
+    payload["mergeReport"] = merge_copy(dump_dir, repo)
+    payload["removedPaths"] = remove_object_files(repo, removed_names)
+    if stash_dir is not None:
+        merged = merge_stash_three_way(repo, stash_dir)
+        payload["dirtyStash"] = str(stash_dir)
+        payload["stashMerge"] = merged
+        if not merged.get("ok"):
+            payload["ok"] = False
+            payload["step"] = "reapply_stash_conflict"
+            payload["error"] = (
+                "Local edits conflict with the storage dump. "
+                "Conflicting files were left as the local edit. fileSync was not recorded."
+            )
+            payload["stop"] = True
+            return json_result(payload)
+    if tip_version is not None:
+        payload["marker"] = record_sync_tip(side=side, tip_version=int(tip_version))
+    else:
+        payload["marker"] = None
+    payload["loadReceipt"] = None
+    payload["message"] = (
+        "Files updated from WORK. This dump is not a load baseline and did not capture objects."
+    )
+    if tip_version is None:
+        payload["message"] += " Pass tip_version to record the sync marker."
+    if reopen_designer and not work_session_open(ib):
+        payload["reopen"] = start_ib_session(ib, "designer", attach_storage=False)
     return json_result(payload)
 
 

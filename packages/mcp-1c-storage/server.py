@@ -976,8 +976,14 @@ def storage_report(
     manage_session: bool = True,
     force_close: bool = True,
     reopen_designer: bool | None = None,
+    n_begin: int | None = None,
+    n_end: int | None = None,
 ) -> str:
-    """Read-only storage history report."""
+    """Read-only storage history report. n_begin/n_end limit the version range."""
+    if n_begin is not None and int(n_begin) < 1:
+        return json_result({"ok": False, "error": "n_begin must be >= 1", "stop": True})
+    if n_end is not None and int(n_end) < 1:
+        return json_result({"ok": False, "error": "n_end must be >= 1", "stop": True})
     work = Path(env("DUMP_TMP_ROOT", str(Path.cwd() / ".tmp" / "1c-storage"))) / now_stamp()
     work.mkdir(parents=True, exist_ok=True)
     out = Path(report_path) if report_path else work / f"storage_report.{report_format}"
@@ -986,6 +992,10 @@ def storage_report(
     if fmt not in ("txt", "mxl"):
         fmt = "txt"
     args = ["/ConfigurationRepositoryReport", str(out), "-ReportFormat", fmt]
+    if n_begin is not None:
+        args.extend(["-NBegin", str(int(n_begin))])
+    if n_end is not None:
+        args.extend(["-NEnd", str(int(n_end))])
     ext_name = None
     if extension is True:
         ext_name = env("ONEC_EXTENSION")
@@ -1006,6 +1016,21 @@ def storage_report(
     )
     payload["reportPath"] = str(out)
     payload["reportExists"] = out.is_file()
+    payload["nBegin"] = int(n_begin) if n_begin is not None else None
+    payload["nEnd"] = int(n_end) if n_end is not None else None
+    if out.is_file() and fmt == "txt":
+        from onec_mcp_shared.repo_file_sync import parse_storage_report
+
+        parsed = parse_storage_report(
+            out.read_text(encoding="utf-8", errors="replace"),
+            n_begin=int(n_begin) if n_begin is not None else None,
+            n_end=int(n_end) if n_end is not None else None,
+            include_objects=n_begin is not None,
+        )
+        payload["tipVersion"] = parsed["tipVersion"]
+        if n_begin is not None:
+            payload["changedObjects"] = parsed["changedObjects"]
+            payload["deletedObjects"] = parsed["deletedObjects"]
     return json_result(payload)
 
 
