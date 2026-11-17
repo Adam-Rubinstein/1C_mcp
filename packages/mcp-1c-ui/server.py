@@ -89,7 +89,7 @@ def ui_invoke(name_contains: str) -> str:
 
 @mcp.tool()
 def ui_type(text: str, x: int = 0, y: int = 0) -> str:
-    """Type into the ERP field. If x,y > 0, focuses that UIA element via SendKeys (no process foreground). Else needs focus."""
+    """Type into the ERP field. Global search / All functions: use object Synonym (user caption), never technical Name (Эст_…). If x,y > 0, focuses that UIA element via SendKeys."""
     try:
         window = _window()
         if int(x) > 0 and int(y) > 0:
