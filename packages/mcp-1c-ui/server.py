@@ -26,6 +26,11 @@ _KEYS = {
     "tab": 0x09,
 }
 
+# Chord: open «Все функции» (IS Toolkit) — then type Synonym, not technical Name.
+_CHORDS = {
+    "alt+a": (0x12, 0x41),  # VK_MENU, 'A'
+}
+
 
 def _window() -> dict:
     must = (env("UI_TITLE_MUST") or "").strip()
@@ -89,7 +94,7 @@ def ui_invoke(name_contains: str) -> str:
 
 @mcp.tool()
 def ui_type(text: str, x: int = 0, y: int = 0) -> str:
-    """Type into the ERP field. Global search / All functions: use object Synonym (user caption), never technical Name (Эст_…). If x,y > 0, focuses that UIA element via SendKeys."""
+    """Type into the ERP field. After Alt+A (Все функции): use object Synonym, never technical Name (Эст_…). If x,y > 0, focuses that UIA element via SendKeys."""
     try:
         window = _window()
         if int(x) > 0 and int(y) > 0:
@@ -103,14 +108,19 @@ def ui_type(text: str, x: int = 0, y: int = 0) -> str:
 
 @mcp.tool()
 def ui_key(key: str) -> str:
-    """Press f7, enter, esc, or tab in the ERP window. F7 runs only on the page that owns the command."""
+    """Press f7/enter/esc/tab, or chord alt+a (Все функции). Open objects via alt+a then Synonym, not header search."""
     try:
-        vk = _KEYS.get(key.strip().lower())
-        if vk is None:
-            return json_result({"ok": False, "error": "key must be f7, enter, esc, or tab"})
+        name = key.strip().lower()
         window = _window()
+        chord = _CHORDS.get(name)
+        if chord is not None:
+            win_ui.tap_chord(window, *chord)
+            return json_result({"ok": True, "window": window, "key": name})
+        vk = _KEYS.get(name)
+        if vk is None:
+            return json_result({"ok": False, "error": "key must be f7, enter, esc, tab, or alt+a"})
         win_ui.tap_key(window, vk)
-        return json_result({"ok": True, "window": window, "key": key})
+        return json_result({"ok": True, "window": window, "key": name})
     except Exception as exc:  # noqa: BLE001
         return json_result({"ok": False, "error": str(exc)})
 

@@ -324,6 +324,26 @@ def tap_key(window: dict, vk: int) -> None:
     _send([down, up])
 
 
+def tap_chord(window: dict, *vks: int) -> None:
+    """Hold modifiers then tap the last key (e.g. Alt+A → VK_MENU, ord('A'))."""
+    if not vks:
+        raise RuntimeError("chord keys required")
+    focus(window)
+    _require_foreground(window)
+    downs: list[INPUT] = []
+    ups: list[INPUT] = []
+    for vk in vks:
+        down = INPUT(type=1)
+        down.u.ki.wVk = int(vk)
+        downs.append(down)
+        up = INPUT(type=1)
+        up.u.ki.wVk = int(vk)
+        up.u.ki.dwFlags = KEYEVENTF_KEYUP
+        ups.append(up)
+    ups.reverse()
+    _send(downs + ups)
+
+
 def click_at(window: dict, x: int, y: int, *, name: str = "", confirm_write: bool = False) -> None:
     allowed, reason = click_allowed(name, confirm_write=confirm_write)
     if name and not allowed:
