@@ -1138,6 +1138,117 @@ def acquire_designer_lock(target: str, *, tool: str = "") -> dict[str, Any] | No
         time.sleep(poll)
 
 
+def _ib_turn_path(target: str) -> Path:
+    name = "work_ib_turn.lock" if _is_work(target) else "dev_ib_turn.lock"
+    return _gates_root() / name
+
+
+def _ib_turn_ttl(kind: str) -> int:
+    if kind == "enterprise":
+        return _int_env("MCP_UI_TURN_TTL_SEC", 180)
+    return _int_env("MCP_DESIGNER_LOCK_TTL_SEC", 1200)
+
+
+def _ib_turn_alive(data: dict[str, Any] | None) -> bool:
+    if not data:
+        return False
+    pid = int(data.get("pid") or 0)
+    if not _pid_alive(pid):
+        return False
+    ttl = int(data.get("ttl_sec") or 0)
+    age = time.time() - float(data.get("ts") or 0)
+    return ttl <= 0 or age <= ttl
+
+
+def acquire_ib_turn(target: str, kind: str, *, task: str = "") -> dict[str, Any] | None:
+    """One WORK turn: designer or enterprise. A waiter never rewrites the holder."""
+    if not _is_work(target):
+        return None
+    if kind not in ("designer", "enterprise"):
+        raise ValueError("ib turn kind must be designer or enterprise")
+    path = _ib_turn_path(target)
+    wait_sec = _int_env("MCP_DESIGNER_LOCK_WAIT_SEC", 720)
+    deadline = time.time() + wait_sec
+    my_pid = os.getpid()
+    while True:
+        data = _read_gate(path)
+        if _ib_turn_alive(data) and data is not None:
+            holder_pid = int(data.get("pid") or 0)
+            if holder_pid == my_pid and data.get("kind") == kind:
+                data["ts"] = time.time()
+                data["ttl_sec"] = _ib_turn_ttl(kind)
+                if task:
+                    data["task"] = task
+                path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+                return None
+            if time.time() >= deadline:
+                return {
+                    "ok": False,
+                    "error": "WORK infobase turn is held. Wait for the other agent to finish.",
+                    "step": "work_ib_turn_busy",
+                    "holder": data,
+                    "hint": "Do not close Enterprise or Configurator. Retry the same step after the holder finishes.",
+                    "stop": True,
+                }
+            time.sleep(0.5)
+            continue
+        try:
+            if path.exists():
+                path.unlink()
+        except OSError:
+            pass
+        try:
+            fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_RDWR)
+        except FileExistsError:
+            if time.time() >= deadline:
+                holder = _read_gate(path) or {}
+                return {
+                    "ok": False,
+                    "error": "WORK infobase turn is held. Wait for the other agent to finish.",
+                    "step": "work_ib_turn_busy",
+                    "holder": holder,
+                    "hint": "Do not close Enterprise or Configurator. Retry the same step after the holder finishes.",
+                    "stop": True,
+                }
+            time.sleep(0.5)
+            continue
+        try:
+            payload = json.dumps(
+                {
+                    "kind": kind,
+                    "pid": my_pid,
+                    "task": task,
+                    "ts": time.time(),
+                    "ttl_sec": _ib_turn_ttl(kind),
+                    "target": "work",
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            os.write(fd, payload.encode("utf-8"))
+        finally:
+            os.close(fd)
+        return None
+
+
+def release_ib_turn(target: str, *, kind: str = "designer") -> None:
+    """Drop a designer turn. Enterprise turn ends by silence TTL, not by the next click gap."""
+    if not _is_work(target) or kind == "enterprise":
+        return
+    path = _ib_turn_path(target)
+    data = _read_gate(path)
+    if not data:
+        return
+    if int(data.get("pid") or 0) != os.getpid():
+        return
+    if data.get("kind") != kind:
+        return
+    try:
+        path.unlink()
+    except OSError:
+        pass
+
+
 def release_designer_lock(target: str) -> None:
     if not _is_work(target):
         return

@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from onec_mcp_shared import env, json_result, load_env_files  # noqa: E402
 from onec_mcp_shared.enterprise_ui import pick_window  # noqa: E402
+from onec_mcp_shared.work_gates import acquire_ib_turn  # noqa: E402
 from onec_mcp_shared.server_run import make_mcp, run_mcp  # noqa: E402
 
 import win_ui  # noqa: E402
@@ -30,6 +31,14 @@ _KEYS = {
 _CHORDS = {
     "alt+a": (0x12, 0x41),  # VK_MENU, 'A'
 }
+
+
+def _enter_ui_turn() -> str | None:
+    """Wait for a Configurator turn. Refresh our Enterprise turn. Do not steal a foreign one."""
+    err = acquire_ib_turn("work", "enterprise", task="ui")
+    if err:
+        return json_result(err)
+    return None
 
 
 def _window() -> dict:
@@ -53,6 +62,9 @@ def ui_windows() -> str:
 def ui_find(name_contains: str = "") -> str:
     """Find UI Automation elements in the WORK Enterprise window. 1C tab Select() is not implemented; click the bounds."""
     try:
+        busy = _enter_ui_turn()
+        if busy:
+            return busy
         window = _window()
         return json_result({"ok": True, "window": window, "elements": win_ui.uia_find(window, name_contains)})
     except Exception as exc:  # noqa: BLE001
@@ -63,6 +75,9 @@ def ui_find(name_contains: str = "") -> str:
 def ui_shot(path: str) -> str:
     """Screenshot the WORK Enterprise window to a png. A pid is not a screenshot."""
     try:
+        busy = _enter_ui_turn()
+        if busy:
+            return busy
         window = _window()
         saved = win_ui.screenshot(window, path)
         return json_result({"ok": True, "window": window, "path": saved})
@@ -74,6 +89,9 @@ def ui_shot(path: str) -> str:
 def ui_click(x: int, y: int, name: str = "", confirm_write: bool = False) -> str:
     """Click inside the WORK Enterprise window. Refuses Провести и закрыть and Да unless confirm_write. If focus is blocked and name is set, uses UIA Invoke."""
     try:
+        busy = _enter_ui_turn()
+        if busy:
+            return busy
         window = _window()
         win_ui.click_at(window, x, y, name=name, confirm_write=confirm_write)
         return json_result({"ok": True, "window": window, "x": x, "y": y, "name": name})
@@ -85,6 +103,9 @@ def ui_click(x: int, y: int, name: str = "", confirm_write: bool = False) -> str
 def ui_invoke(name_contains: str) -> str:
     """Invoke a named control in WORK Enterprise via UI Automation (no mouse focus required)."""
     try:
+        busy = _enter_ui_turn()
+        if busy:
+            return busy
         window = _window()
         win_ui.invoke_by_name(window, name_contains)
         return json_result({"ok": True, "window": window, "name": name_contains})
@@ -96,6 +117,9 @@ def ui_invoke(name_contains: str) -> str:
 def ui_type(text: str, x: int = 0, y: int = 0) -> str:
     """Type into the ERP field. After Alt+A (Все функции): use object Synonym, never technical Name (Эст_…). If x,y > 0, focuses that UIA element via SendKeys."""
     try:
+        busy = _enter_ui_turn()
+        if busy:
+            return busy
         window = _window()
         if int(x) > 0 and int(y) > 0:
             win_ui.type_at(window, int(x), int(y), text)
@@ -110,6 +134,9 @@ def ui_type(text: str, x: int = 0, y: int = 0) -> str:
 def ui_key(key: str) -> str:
     """Press f7/enter/esc/tab, or chord alt+a (Все функции). Open objects via alt+a then Synonym, not header search."""
     try:
+        busy = _enter_ui_turn()
+        if busy:
+            return busy
         name = key.strip().lower()
         window = _window()
         chord = _CHORDS.get(name)

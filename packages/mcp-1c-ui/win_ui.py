@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ctypes
 import json
+import os
 import subprocess
 from ctypes import wintypes
 from pathlib import Path
@@ -184,6 +185,7 @@ def list_windows() -> list[dict]:
 
 
 def _run_ps(script: str, env: dict[str, str]) -> str:
+    flags = 0x08000000 if os.name == "nt" else 0
     proc = subprocess.run(
         ["powershell", "-NoProfile", "-Command", script],
         capture_output=True,
@@ -192,6 +194,7 @@ def _run_ps(script: str, env: dict[str, str]) -> str:
         errors="replace",
         env={**dict(**_base_env()), **env},
         check=False,
+        creationflags=flags,
     )
     if proc.returncode != 0:
         detail = (proc.stderr or proc.stdout or "").strip()

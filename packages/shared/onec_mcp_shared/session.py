@@ -13,6 +13,11 @@ from typing import Any, Callable, TypeVar
 from . import auth_for_ib_path, env, require_env
 
 T = TypeVar("T")
+_CREATE_NO_WINDOW = 0x08000000
+
+
+def _hidden_flags() -> int:
+    return _CREATE_NO_WINDOW if os.name == "nt" else 0
 
 
 @dataclass
@@ -156,6 +161,7 @@ def _iter_onec_processes() -> list[tuple[int, str]]:
             text=True,
             encoding="utf-8",
             errors="replace",
+            creationflags=_hidden_flags(),
         )
         for line in ps.splitlines():
             if "|" not in line:
@@ -211,6 +217,7 @@ def _iter_named_processes(names: tuple[str, ...]) -> list[tuple[int, str]]:
             text=True,
             encoding="utf-8",
             errors="replace",
+            creationflags=_hidden_flags(),
         )
         for line in ps.splitlines():
             if "|" not in line:
@@ -450,7 +457,12 @@ def with_managed_session(
     Explicit ONEC_STORAGE_* attach is only for headless /F batch inside fn.
     WORK: restart_even_on_fail default False (do not pop Configurator after fail).
     """
-    from onec_mcp_shared.work_gates import DesignerBusy, designer_mutex
+    from onec_mcp_shared.work_gates import (
+        DesignerBusy,
+        acquire_ib_turn,
+        designer_mutex,
+        release_ib_turn,
+    )
 
     meta: dict[str, Any] = {"ib": str(ib_path), "reopen": reopen}
     work = (env("ONEC_IB_WORK") or "").strip()
@@ -462,7 +474,12 @@ def with_managed_session(
         except OSError:
             if os.path.normcase(os.path.normpath(str(ib_path))) == os.path.normcase(os.path.normpath(work)):
                 target_guess = "work"
+    held_turn = False
     try:
+        turn_err = acquire_ib_turn(target_guess, "designer", task="managed_session")
+        if turn_err:
+            raise DesignerBusy(turn_err)
+        held_turn = target_guess == "work"
         with designer_mutex(target_guess, tool="with_managed_session"):
             return _with_managed_session_body(
                 ib_path,
@@ -476,6 +493,9 @@ def with_managed_session(
     except DesignerBusy as exc:
         meta.update(exc.payload)
         raise
+    finally:
+        if held_turn:
+            release_ib_turn(target_guess, kind="designer")
 
 
 def _with_managed_session_body(

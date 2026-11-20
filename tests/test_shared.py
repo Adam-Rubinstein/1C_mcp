@@ -502,6 +502,147 @@ def test_require_work_task():
     assert require_work_task(None, target="dev") is None
 
 
+def test_ib_turn_waiter_does_not_touch_holder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    import json
+    import os
+    import time
+
+    from onec_mcp_shared import work_gates as wg
+
+    monkeypatch.setenv("DUMP_TMP_ROOT", str(tmp_path / "dump"))
+    monkeypatch.setenv("MCP_DESIGNER_LOCK_WAIT_SEC", "1")
+    monkeypatch.setenv("MCP_UI_TURN_TTL_SEC", "180")
+    holder_ts = time.time()
+    path = wg._ib_turn_path("work")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "kind": "enterprise",
+                "pid": 424242,
+                "task": "ui",
+                "ts": holder_ts,
+                "ttl_sec": 180,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(wg, "_pid_alive", lambda pid: pid in (424242, os.getpid()))
+    err = wg.acquire_ib_turn("work", "designer", task="dump")
+    assert err is not None
+    assert err["step"] == "work_ib_turn_busy"
+    again = json.loads(path.read_text(encoding="utf-8"))
+    assert again["ts"] == holder_ts
+    assert again["kind"] == "enterprise"
+    assert again["pid"] == 424242
+
+
+def test_ib_turn_ui_does_not_overwrite_designer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    import json
+    import os
+    import time
+
+    from onec_mcp_shared import work_gates as wg
+
+    monkeypatch.setenv("DUMP_TMP_ROOT", str(tmp_path / "dump"))
+    monkeypatch.setenv("MCP_DESIGNER_LOCK_WAIT_SEC", "1")
+    holder_ts = time.time()
+    path = wg._ib_turn_path("work")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "kind": "designer",
+                "pid": 424242,
+                "task": "load",
+                "ts": holder_ts,
+                "ttl_sec": 1200,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(wg, "_pid_alive", lambda pid: pid in (424242, os.getpid()))
+    err = wg.acquire_ib_turn("work", "enterprise", task="ui")
+    assert err is not None
+    assert err["step"] == "work_ib_turn_busy"
+    again = json.loads(path.read_text(encoding="utf-8"))
+    assert again["ts"] == holder_ts
+    assert again["kind"] == "designer"
+
+
+def test_ib_turn_same_holder_refreshes_and_release_keeps_enterprise(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    import json
+    import os
+    import time
+
+    from onec_mcp_shared import work_gates as wg
+
+    monkeypatch.setenv("DUMP_TMP_ROOT", str(tmp_path / "dump"))
+    monkeypatch.setattr(wg, "_pid_alive", lambda pid: pid == os.getpid())
+    assert wg.acquire_ib_turn("work", "enterprise", task="ui") is None
+    path = wg._ib_turn_path("work")
+    first = json.loads(path.read_text(encoding="utf-8"))
+    time.sleep(0.05)
+    assert wg.acquire_ib_turn("work", "enterprise", task="ui") is None
+    second = json.loads(path.read_text(encoding="utf-8"))
+    assert second["ts"] > first["ts"]
+    assert second["kind"] == "enterprise"
+    wg.release_ib_turn("work", kind="enterprise")
+    assert path.exists()
+    path.unlink()
+    assert wg.acquire_ib_turn("work", "designer", task="dump") is None
+    wg.release_ib_turn("work", kind="designer")
+    assert not path.exists()
+
+
+def test_managed_session_waits_instead_of_closing_enterprise(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    import json
+    import time
+
+    from onec_mcp_shared import session as sess
+    from onec_mcp_shared.work_gates import DesignerBusy
+
+    ib = tmp_path / "ib"
+    ib.mkdir()
+    monkeypatch.setenv("DUMP_TMP_ROOT", str(tmp_path / "dump"))
+    monkeypatch.setenv("ONEC_IB_WORK", str(ib))
+    monkeypatch.setenv("MCP_DESIGNER_LOCK_WAIT_SEC", "1")
+    holder_ts = time.time()
+    from onec_mcp_shared import work_gates as wg
+
+    path = wg._ib_turn_path("work")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "kind": "enterprise",
+                "pid": 424242,
+                "task": "ui",
+                "ts": holder_ts,
+                "ttl_sec": 180,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(wg, "_pid_alive", lambda pid: pid == 424242)
+    closed: list[int] = []
+    monkeypatch.setattr(sess, "close_ib_sessions", lambda *args, **kwargs: closed.append(1))
+    monkeypatch.setattr(sess, "find_ib_processes", lambda *args, **kwargs: [])
+    try:
+        sess.with_managed_session(ib, lambda: None, force_close=True)
+        raised = False
+    except DesignerBusy:
+        raised = True
+    assert raised
+    assert closed == []
+    again = json.loads(path.read_text(encoding="utf-8"))
+    assert again["ts"] == holder_ts
+
+
 def test_designer_mutex_reentrant_and_stale(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from onec_mcp_shared import work_gates as wg
 
